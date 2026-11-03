@@ -99,7 +99,7 @@ jobs:
       - run: |
           su --preserve-environment --shell /bin/bash pwuser -c '
             export HOME=/home/pwuser
-            export PATH="/pnpm:$PATH"
+            export PATH="$PNPM_HOME:$PATH"
             cd "$GITHUB_WORKSPACE"
             git config --global --add safe.directory "$GITHUB_WORKSPACE"
             pnpm test:e2e:web -- --shard=${{ matrix.shard }}
