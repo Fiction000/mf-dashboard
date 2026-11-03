@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { mfUrls } from "@mf-dashboard/meta/urls";
-import { chromium } from "playwright";
 import { loginWithAuthState } from "../../src/auth/login.js";
 import { createBrowserContext } from "../../src/browser/context.js";
+import { launchCrawlerChromium } from "../../src/browser/launch.js";
 import { getSelectedGroupId, switchGroupAnonymously } from "./group-state.js";
 
 export const SCREENSHOT_DIR = path.resolve(process.cwd(), "tests/e2e/screenshots");
@@ -26,7 +26,7 @@ export async function setup() {
   }
 
   console.log("Setting up E2E tests...");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchCrawlerChromium({ headless: true });
   const context = await createBrowserContext(browser, { useAuthState: true });
   const page = await context.newPage();
 
@@ -50,7 +50,7 @@ export async function teardown() {
   }
 
   console.log("Restoring default group state");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchCrawlerChromium({ headless: true });
   const context = await createBrowserContext(browser, { useAuthState: true });
   const page = await context.newPage();
 

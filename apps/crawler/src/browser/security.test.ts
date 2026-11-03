@@ -1,5 +1,6 @@
-import { chromium, type Browser } from "playwright";
+import type { Browser } from "playwright";
 import { afterEach, expect, test } from "vitest";
+import { launchCrawlerChromium } from "./launch.js";
 
 let browser: Browser | undefined;
 
@@ -9,7 +10,7 @@ afterEach(async () => {
 });
 
 test("crawler Chromium is patched, sandboxed, and renders local content", async () => {
-  browser = await chromium.launch({ headless: true, args: ["--enable-automation"] });
+  browser = await launchCrawlerChromium({ headless: true, args: ["--enable-automation"] });
   const page = await browser.newPage();
   await page.setContent("<title>browser-security-smoke</title><main>local-only</main>");
   const commandLine = await (

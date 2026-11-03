@@ -1,6 +1,7 @@
 import { loginWithAuthState } from "@mf-dashboard/crawler/auth/login";
 import { hasAuthState } from "@mf-dashboard/crawler/auth/state";
 import { createBrowserContext } from "@mf-dashboard/crawler/browser/context";
+import { launchCrawlerChromium } from "@mf-dashboard/crawler/browser/launch";
 import {
   getAllGroups as getPageGroups,
   switchGroup,
@@ -8,7 +9,7 @@ import {
 } from "@mf-dashboard/crawler/scrapers/group";
 import { getPortfolio } from "@mf-dashboard/crawler/scrapers/portfolio";
 import { getDb, closeDb, getAllGroups as getDbGroups } from "@mf-dashboard/db";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   compareHoldings,
@@ -29,7 +30,7 @@ describe.skipIf(!hasAuthState())("Holdings比較: スクレイピング vs DB", 
       );
     }
 
-    browser = await chromium.launch({
+    browser = await launchCrawlerChromium({
       headless: true,
     });
 

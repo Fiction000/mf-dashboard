@@ -1,6 +1,7 @@
 import type { KnipConfig } from "knip";
 
 const config: KnipConfig = {
+  ignoreDependencies: ["@puppeteer/browsers", "playwright"],
   workspaces: {
     "apps/crawler": {
       ignore: ["src/hooks/helpers.ts"],

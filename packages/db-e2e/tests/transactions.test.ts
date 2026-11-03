@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { loginWithAuthState } from "@mf-dashboard/crawler/auth/login";
 import { hasAuthState } from "@mf-dashboard/crawler/auth/state";
 import { createBrowserContext } from "@mf-dashboard/crawler/browser/context";
+import { launchCrawlerChromium } from "@mf-dashboard/crawler/browser/launch";
 import { scrapeCashFlowHistory } from "@mf-dashboard/crawler/scrapers/cash-flow-history";
 import {
   getAllGroups as getPageGroups,
@@ -10,7 +11,7 @@ import {
   createGroupScope,
 } from "@mf-dashboard/crawler/scrapers/group";
 import { getDb, closeDb, getAllGroups as getDbGroups } from "@mf-dashboard/db";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   compareTransactions,
@@ -35,7 +36,7 @@ describe.skipIf(!hasAuthState())("Transaction比較: スクレイピング vs DB
       );
     }
 
-    browser = await chromium.launch({
+    browser = await launchCrawlerChromium({
       headless: true,
     });
 

@@ -4,6 +4,7 @@ import { storybookTest } from "@storybook/addon-vitest/vitest-plugin";
 import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
+import { getPatchedChromiumLaunchOptions } from "../../scripts/chromium-runtime.cjs";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +34,7 @@ export default defineConfig({
             provider: playwright({
               // デフォルトビューポートをデスクトップサイズに設定
               launchOptions: {
+                ...getPatchedChromiumLaunchOptions(),
                 args: ["--window-size=1280,800"],
               },
             }) as never,

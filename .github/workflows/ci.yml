@@ -76,8 +76,6 @@ jobs:
         shard: ["1/3", "2/3", "3/3"]
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -91,7 +89,20 @@ jobs:
       - run: |
           mkdir -p apps/web/.next/standalone
           tar -xzf .artifacts/e2e-web-build.tar.gz -C apps/web/.next/standalone
-      - run: pnpm test:e2e:web -- --shard=${{ matrix.shard }}
+      - run: |
+          sandbox_helper="$(find "$GITHUB_WORKSPACE/.cache/mf-dashboard-chromium" -type f -name chrome_sandbox -print -quit)"
+          test -n "$sandbox_helper"
+          install -D -o root -g root -m 4755 "$sandbox_helper" /usr/local/lib/mf-dashboard-chromium/chrome_sandbox
+          echo "CHROME_DEVEL_SANDBOX=/usr/local/lib/mf-dashboard-chromium/chrome_sandbox" >> "$GITHUB_ENV"
+      - run: chown -R pwuser:pwuser "$GITHUB_WORKSPACE"
+      - run: |
+          su --preserve-environment --shell /bin/bash pwuser -c '
+            export HOME=/home/pwuser
+            export PATH="/pnpm:$PATH"
+            cd "$GITHUB_WORKSPACE"
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+            pnpm test:e2e:web -- --shard=${{ matrix.shard }}
+          '
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.2
         with:
