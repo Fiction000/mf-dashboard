@@ -45,14 +45,9 @@ COPY . .
 
 RUN node scripts/install-chromium.mjs \
     && chmod -R a+rX .cache/mf-dashboard-chromium \
-    && sandbox_helper="$(find .cache/mf-dashboard-chromium -type f -name chrome_sandbox -print -quit)" \
-    && test -n "$sandbox_helper" \
-    && install -D -o root -g root -m 4755 "$sandbox_helper" /usr/local/lib/mf-dashboard-chromium/chrome_sandbox \
     && mkdir -p /app/data /app/crawler-state \
     && chmod 1777 /app/crawler-state \
     && chmod 0755 /app/docker/crawler/entrypoint.sh
-
-ENV CHROME_DEVEL_SANDBOX=/usr/local/lib/mf-dashboard-chromium/chrome_sandbox
 
 USER node
 
