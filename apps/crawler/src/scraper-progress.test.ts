@@ -297,6 +297,51 @@ describe("scraper progress", () => {
     );
   });
 
+  test("strict mode waits for refresh completion before scraping accounts", async () => {
+    const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+      id: "run-a",
+      source: "test",
+      startedAt: "2026-07-01T00:00:00.000Z",
+    });
+    vi.mocked(clickRefreshButton).mockResolvedValue({
+      completed: true,
+      incompleteAccounts: [],
+    });
+
+    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
+      requireRefreshComplete: true,
+    });
+
+    expect(clickRefreshButton).toHaveBeenCalledOnce();
+    expect(getRegisteredAccounts).toHaveBeenCalled();
+    expect(vi.mocked(clickRefreshButton).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(getRegisteredAccounts).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  test("strict refresh timeout aborts before scraping data that would be saved", async () => {
+    const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+      id: "run-a",
+      source: "test",
+      startedAt: "2026-07-01T00:00:00.000Z",
+    });
+
+    await expect(
+      scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
+        requireRefreshComplete: true,
+      }),
+    ).rejects.toThrow("MoneyForward refresh did not complete");
+
+    expect(getRegisteredAccounts).not.toHaveBeenCalled();
+    expect(progress.getState().timeline).toContainEqual(
+      expect.objectContaining({
+        step: "moneyforward_refresh",
+        status: "warning",
+        reason: expect.objectContaining({ code: "refresh_timeout" }),
+      }),
+    );
+  });
+
   test("refresh timeout を warning にし、未完了機関と group name を保持する", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",

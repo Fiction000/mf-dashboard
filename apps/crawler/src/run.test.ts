@@ -42,6 +42,7 @@ beforeEach(async () => {
   tempDir = await mkdtemp(path.join(os.tmpdir(), "crawler-run-progress-"));
   vi.mocked(runLoadPhase).mockReturnValue({
     skipRefresh: false,
+    requireRefreshComplete: false,
     cleanupGroups: false,
     authState: "configured",
     dbPath: "/tmp/demo.db",
@@ -254,6 +255,7 @@ describe("runCrawler progress", () => {
   test("history replacementsをcurrent dataと同じsave phaseへ渡す", async () => {
     vi.mocked(runLoadPhase).mockReturnValue({
       skipRefresh: false,
+      requireRefreshComplete: false,
       cleanupGroups: false,
       authState: "configured",
       dbPath: "/tmp/demo.db",

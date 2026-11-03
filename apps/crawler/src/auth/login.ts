@@ -179,6 +179,7 @@ export async function login(page: Page): Promise<void> {
   debug("Waiting for login to complete...");
   await page.waitForURL(/https:\/\/(id\.)?moneyforward\.com\/.*/, {
     timeout: TIMEOUTS.login,
+    waitUntil: "domcontentloaded",
   });
 
   // Navigate to Money Forward ME - will redirect to MFID for auth

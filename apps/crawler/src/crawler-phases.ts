@@ -46,6 +46,7 @@ const DEBUG_DIR = path.resolve(import.meta.dirname, "../debug");
 
 export interface CrawlerConfig {
   skipRefresh: boolean;
+  requireRefreshComplete: boolean;
   cleanupGroups: boolean;
   authState: "configured" | "none";
   dbPath: string;
@@ -92,6 +93,7 @@ export function loadCrawlerConfig(
   authStateExists: () => boolean = hasAuthState,
 ): CrawlerConfig {
   const skipRefresh = env.SKIP_REFRESH === "true";
+  const requireRefreshComplete = env.REQUIRE_REFRESH_COMPLETE === "true";
   const cleanupGroups = env.CLEANUP_GROUPS === "true";
   const dbPath = env.DB_PATH || DEFAULT_DB_PATH;
   const dbExists = fileExists(dbPath);
@@ -99,6 +101,7 @@ export function loadCrawlerConfig(
 
   return {
     skipRefresh,
+    requireRefreshComplete,
     cleanupGroups,
     authState: authStateExists() ? "configured" : "none",
     dbPath,
@@ -113,6 +116,7 @@ export function loadCrawlerConfig(
 function logCrawlerOptions(config: CrawlerConfig): void {
   phase("Options");
   log(`SKIP_REFRESH:   ${config.skipRefresh}`);
+  log(`REQUIRE_REFRESH_COMPLETE: ${config.requireRefreshComplete}`);
   info(`CLEANUP_GROUPS: ${config.cleanupGroups}`);
   log(`SCRAPE_MODE:    ${config.scrapeMode} (DB exists: ${config.dbExists})`);
   log(`DEBUG:          ${config.isDebug}`);
@@ -176,12 +180,13 @@ export async function runAuthPhase(page: Page, context: BrowserContext): Promise
 
 export async function runScrapePhase(
   page: Page,
-  config: Pick<CrawlerConfig, "skipRefresh">,
+  config: Pick<CrawlerConfig, "skipRefresh" | "requireRefreshComplete">,
   progress: CrawlerProgressReporter,
 ): Promise<ScrapeResult> {
   phase("Scrape");
   const scrapeResult = await scrapeAllGroups(page, progress, {
     skipRefresh: config.skipRefresh,
+    requireRefreshComplete: config.requireRefreshComplete,
   });
 
   info(`Scraped ${scrapeResult.groupDataList.length} groups`);

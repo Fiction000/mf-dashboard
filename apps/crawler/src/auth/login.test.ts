@@ -90,6 +90,11 @@ describe("login", () => {
 
     await expect(login(page)).resolves.toBeUndefined();
     expect(log).toHaveBeenCalledWith("Login successful!");
+    expect(page.waitForURL).toHaveBeenNthCalledWith(
+      1,
+      /https:\/\/(id\.)?moneyforward\.com\/.*/,
+      { timeout: 30000, waitUntil: "domcontentloaded" },
+    );
   });
 
   test("rejects the public Money Forward home page", async () => {

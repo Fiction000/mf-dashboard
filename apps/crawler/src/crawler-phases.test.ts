@@ -182,7 +182,18 @@ describe("loadCrawlerConfig", () => {
 
     expect(config.scrapeMode).toBe("month");
     expect(config.isHistoryMode).toBe(false);
+    expect(config.requireRefreshComplete).toBe(false);
     expect(config.authState).toBe("configured");
+  });
+
+  test("空のSKIP_REFRESHではMoneyForward集計をスキップしない", () => {
+    const config = loadCrawlerConfig(
+      { SKIP_REFRESH: "" },
+      () => true,
+      () => true,
+    );
+
+    expect(config.skipRefresh).toBe(false);
   });
 
   test("DBがない場合はhistory modeを既定にする", () => {
@@ -203,6 +214,7 @@ describe("loadCrawlerConfig", () => {
       DB_PATH: "/tmp/test.db",
       DEBUG: "true",
       HEADED: "true",
+      REQUIRE_REFRESH_COMPLETE: "true",
       SCRAPE_MODE: "history",
       SKIP_REFRESH: "true",
     };
@@ -214,6 +226,7 @@ describe("loadCrawlerConfig", () => {
     );
 
     expect(config.skipRefresh).toBe(true);
+    expect(config.requireRefreshComplete).toBe(true);
     expect(config.cleanupGroups).toBe(true);
     expect(config.dbPath).toBe("/tmp/test.db");
     expect(config.dbExists).toBe(true);

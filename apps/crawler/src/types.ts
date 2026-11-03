@@ -16,6 +16,7 @@ export interface ScrapedData {
 
 export interface ScrapeOptions {
   skipRefresh?: boolean;
+  requireRefreshComplete?: boolean;
 }
 
 export interface CashFlowHistoryResult {

@@ -140,6 +140,10 @@ async function scrapeGlobalData(
       await progress.failStep(refreshStep, normalizeCrawlerError(error, "refresh_failed"));
       throw error;
     }
+
+    if (!refreshResult.completed && options.requireRefreshComplete) {
+      throw new Error("MoneyForward refresh did not complete before the configured wait expired");
+    }
   }
 
   const registeredAccounts = await runCrawlerStep(
