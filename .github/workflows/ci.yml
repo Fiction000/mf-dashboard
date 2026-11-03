@@ -95,7 +95,8 @@ jobs:
       - run: |
           mkdir -p apps/web/.next/standalone
           tar -xzf .artifacts/e2e-web-build.tar.gz -C apps/web/.next/standalone
-      - run: chown -R pwuser:pwuser "$GITHUB_WORKSPACE"
+      # pwuser runs pnpm, which writes to the pnpm home and the workspace.
+      - run: chown -R pwuser:pwuser "$GITHUB_WORKSPACE" /github/home
       - run: |
           su --preserve-environment --shell /bin/bash pwuser -c '
             export HOME=/home/pwuser
