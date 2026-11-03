@@ -23,6 +23,11 @@ jobs:
       - run: pnpm format --check
       - run: pnpm knip
       - run: pnpm typecheck --affected
+      - run: |
+          sandbox_helper="$(find "$GITHUB_WORKSPACE/.cache/mf-dashboard-chromium" -type f -name chrome_sandbox -print -quit)"
+          test -n "$sandbox_helper"
+          sudo install -D -o root -g root -m 4755 "$sandbox_helper" /usr/local/lib/mf-dashboard-chromium/chrome_sandbox
+          echo "CHROME_DEVEL_SANDBOX=/usr/local/lib/mf-dashboard-chromium/chrome_sandbox" >> "$GITHUB_ENV"
       - run: pnpm test --affected
   build-demo:
     runs-on: ubuntu-latest
