@@ -1,4 +1,5 @@
 node_modules/
+.cache/mf-dashboard-chromium/
 dist/
 *.log
 .env

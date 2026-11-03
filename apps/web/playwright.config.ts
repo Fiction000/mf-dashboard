@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import { getPatchedChromiumLaunchOptions } from "../../scripts/chromium-runtime.cjs";
 
 const mockCrawlerUrl = "http://127.0.0.1:18766";
 const mockCrawlerToken = "e2e-refresh-token";
@@ -20,11 +21,17 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: getPatchedChromiumLaunchOptions(),
+      },
     },
     {
       name: "mobile-chrome",
-      use: { ...devices["Pixel 7"] },
+      use: {
+        ...devices["Pixel 7"],
+        launchOptions: getPatchedChromiumLaunchOptions(),
+      },
     },
     {
       name: "mobile-safari",

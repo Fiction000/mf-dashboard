@@ -1,0 +1,36 @@
+import type { Browser } from "playwright";
+import { afterEach, expect, test } from "vitest";
+import { launchCrawlerChromium } from "./launch.js";
+
+let browser: Browser | undefined;
+
+afterEach(async () => {
+  await browser?.close();
+  browser = undefined;
+});
+
+test("crawler Chromium is patched, sandboxed, and renders local content", async () => {
+  browser = await launchCrawlerChromium({
+    headless: true,
+    args: ["--enable-automation"],
+  });
+  const page = await browser.newPage();
+  await page.setContent("<title>browser-security-smoke</title><main>local-only</main>");
+  const commandLine = await (
+    await browser.newBrowserCDPSession()
+  ).send("Browser.getBrowserCommandLine");
+
+  expect(browser.version()).toBe("156.0.8078.80");
+  expect(commandLine.arguments).not.toContain("--no-sandbox");
+  expect(await page.title()).toBe("browser-security-smoke");
+  expect(await page.locator("main").textContent()).toBe("local-only");
+});
+
+test.each([
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-gpu-sandbox",
+  "--disable-seccomp-filter-sandbox",
+])("crawler Chromium rejects the sandbox-disabling flag %s", async (flag) => {
+  await expect(launchCrawlerChromium({ headless: true, args: [flag] })).rejects.toThrow(/sandbox/i);
+});

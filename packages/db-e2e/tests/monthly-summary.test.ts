@@ -1,6 +1,7 @@
 import { loginWithAuthState } from "@mf-dashboard/crawler/auth/login";
 import { hasAuthState } from "@mf-dashboard/crawler/auth/state";
 import { createBrowserContext } from "@mf-dashboard/crawler/browser/context";
+import { launchCrawlerChromium } from "@mf-dashboard/crawler/browser/launch";
 import { switchGroup, createGroupScope } from "@mf-dashboard/crawler/scrapers/group";
 import { scrapeMonthlySummary } from "@mf-dashboard/crawler/scrapers/monthly-summary";
 import {
@@ -9,7 +10,7 @@ import {
   getAllGroups as getDbGroups,
   closeDb,
 } from "@mf-dashboard/db";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 /**
  * Monthly Summary E2E Test
  *
@@ -30,7 +31,7 @@ describe("Monthly Summary比較: スクレイピング vs DB", () => {
       );
     }
 
-    browser = await chromium.launch({ headless: true });
+    browser = await launchCrawlerChromium({ headless: true });
     context = await createBrowserContext(browser, { useAuthState: true });
     page = await context.newPage();
     await loginWithAuthState(page, context);

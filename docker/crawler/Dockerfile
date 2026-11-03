@@ -3,14 +3,13 @@ WORKDIR /app
 ENV PNPM_HOME=/pnpm \
     COREPACK_HOME=/pnpm/corepack \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PATH=/pnpm:$PATH \
     HOME=/home/node
 
 RUN mkdir -p /pnpm \
     && npm install --global corepack@0.36.0 \
     && corepack enable \
-    && apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tini \
+    && apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tini unzip \
     && rm -rf /var/lib/apt/lists/*
 
 ARG SUPERCRONIC_VERSION=v0.2.30
@@ -39,15 +38,17 @@ RUN package_manager=$(node -p "require('./package.json').packageManager") \
     && corepack prepare "$package_manager" --activate \
     && pnpm install --frozen-lockfile --prod --filter "@mf-dashboard/crawler..." --ignore-scripts \
     && pnpm rebuild --pending --filter "@mf-dashboard/crawler..." \
-    && pnpm --filter "@mf-dashboard/crawler" exec playwright install --with-deps chromium \
-    && chmod -R a+rX /ms-playwright \
+    && pnpm --filter "@mf-dashboard/crawler" exec playwright install-deps chromium \
     && rm -rf /pnpm/store /var/lib/apt/lists/*
 
 COPY . .
 
-RUN mkdir -p /app/data /app/crawler-state \
+RUN node scripts/install-chromium.mjs \
+    && chmod -R a+rX .cache/mf-dashboard-chromium \
+    && mkdir -p /app/data /app/crawler-state \
     && chmod 1777 /app/crawler-state \
     && chmod 0755 /app/docker/crawler/entrypoint.sh
+
 USER node
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/crawler/entrypoint.sh"]

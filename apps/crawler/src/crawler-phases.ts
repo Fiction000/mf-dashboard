@@ -10,10 +10,11 @@ import {
   saveTransactionsForMonths,
   type TransactionPeriodReplacement,
 } from "@mf-dashboard/db/repository/transactions";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { type Browser, type BrowserContext, type Page } from "playwright";
 import { loginWithAuthState } from "./auth/login.js";
 import { hasAuthState } from "./auth/state.js";
 import { createBrowserContext } from "./browser/context.js";
+import { launchCrawlerChromium } from "./browser/launch.js";
 import { categorizeCashFlowMonth } from "./category-decision/categorize-cash-flow.js";
 import { loadCategoryDecisionConfig } from "./category-decision/config.js";
 import type {
@@ -128,7 +129,7 @@ export async function runSetupPhase(config: CrawlerConfig): Promise<CrawlerRunti
   let browser: Browser | null = null;
   try {
     log("Launching browser");
-    browser = await chromium.launch({
+    browser = await launchCrawlerChromium({
       headless: !config.isHeaded,
     });
 
