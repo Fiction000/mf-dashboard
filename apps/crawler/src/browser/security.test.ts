@@ -10,7 +10,10 @@ afterEach(async () => {
 });
 
 test("crawler Chromium is patched, sandboxed, and renders local content", async () => {
-  browser = await launchCrawlerChromium({ headless: true, args: ["--enable-automation"] });
+  browser = await launchCrawlerChromium({
+    headless: true,
+    args: ["--enable-automation"],
+  });
   const page = await browser.newPage();
   await page.setContent("<title>browser-security-smoke</title><main>local-only</main>");
   const commandLine = await (
@@ -21,4 +24,13 @@ test("crawler Chromium is patched, sandboxed, and renders local content", async 
   expect(commandLine.arguments).not.toContain("--no-sandbox");
   expect(await page.title()).toBe("browser-security-smoke");
   expect(await page.locator("main").textContent()).toBe("local-only");
+});
+
+test.each([
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-gpu-sandbox",
+  "--disable-seccomp-filter-sandbox",
+])("crawler Chromium rejects the sandbox-disabling flag %s", async (flag) => {
+  await expect(launchCrawlerChromium({ headless: true, args: [flag] })).rejects.toThrow(/sandbox/i);
 });
