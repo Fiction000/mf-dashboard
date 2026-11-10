@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { describe, expect, test, vi } from "vitest";
 import {
+  clickRefreshButton,
   getMaxWaitMinutes,
   getRefreshStatus,
   navigateToAccountsPage,
@@ -145,5 +146,32 @@ describe("navigateToAccountsPage", () => {
 
     await expect(navigateToAccountsPage(page, { retryDelayMs: 0 })).rejects.toBe(error);
     expect(goto).toHaveBeenCalledOnce();
+  });
+});
+
+describe("clickRefreshButton", () => {
+  test("ホームが networkidle にならなくても一括更新を押して完了まで進む", async () => {
+    const click = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const statusRows = { count: vi.fn<() => Promise<number>>().mockResolvedValue(0) };
+    const page = {
+      goto: vi.fn<(...args: any[]) => any>().mockResolvedValue(null),
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+      waitForLoadState: vi
+        .fn<(state?: string) => Promise<void>>()
+        .mockImplementation(async (state) => {
+          if (state === "networkidle") {
+            throw new Error("page.waitForLoadState: Timeout 30000ms exceeded.");
+          }
+        }),
+      waitForTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      locator: vi.fn<(selector: string) => any>((selector) =>
+        selector === 'a:has-text("一括更新")' ? { first: () => ({ click }) } : statusRows,
+      ),
+    } as unknown as Page;
+
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
+    ).resolves.toEqual({ completed: true, incompleteAccounts: [] });
+    expect(click).toHaveBeenCalledOnce();
   });
 });
