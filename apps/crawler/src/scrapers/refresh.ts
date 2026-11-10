@@ -127,8 +127,9 @@ export async function clickRefreshButton(
   debug("Looking for refresh button...");
 
   // Navigate to home and click refresh button
-  await page.goto(mfUrls.home);
-  await page.waitForLoadState("networkidle");
+  // MF's home can stay busy past 30s after it renders, so networkidle is not a reliable gate.
+  // click() already waits for the button.
+  await page.goto(mfUrls.home, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
 
   const refreshButton = page.locator('a:has-text("一括更新")').first();
   await refreshButton.click();
