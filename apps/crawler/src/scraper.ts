@@ -146,9 +146,13 @@ async function scrapeGlobalData(
     }
 
     let accountSummary: AccountIssueSummary | null = null;
+    let accountStatusUnknown = false;
     try {
       accountSummary = await getAccountIssues(page);
     } catch (error) {
+      // Never report "done" without per-account confirmation. If /accounts itself is unreadable,
+      // the registered_accounts step below fails the run.
+      accountStatusUnknown = true;
       warn(
         `Could not read per-account refresh status: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -178,7 +182,19 @@ async function scrapeGlobalData(
       throw new Error(message);
     }
 
-    if (refreshResult.completed && issues.length === 0) {
+    if (refreshResult.completed && issues.length === 0 && accountStatusUnknown) {
+      warn("口座ごとの更新状態を確認できませんでした");
+      await progress.warnStep(
+        refreshStep,
+        {
+          code: "refresh_incomplete",
+          message: "口座ごとの更新状態を確認できませんでした",
+          incompleteAccounts: [],
+          accountIssues: [],
+        },
+        { maxWaitMinutes: getMaxWaitMinutes(), remainingCount: 0, incompleteAccounts: [] },
+      );
+    } else if (refreshResult.completed && issues.length === 0) {
       await progress.completeStep(refreshStep, {
         remainingCount: 0,
         incompleteAccounts: [],
