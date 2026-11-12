@@ -142,6 +142,25 @@ describe("crawler run state file", () => {
       },
     ],
     [
+      "refresh_timeout with account issues",
+      {
+        code: "refresh_timeout",
+        message: "更新が完了しませんでした",
+        maxWaitMinutes: 20,
+        incompleteAccounts: ["Institution A"],
+        accountIssues: [{ name: "Institution A", status: "updating", message: "更新中" }],
+      },
+    ],
+    [
+      "refresh_incomplete",
+      {
+        code: "refresh_incomplete",
+        message: "一部の金融機関が更新できませんでした",
+        incompleteAccounts: ["Card B"],
+        accountIssues: [{ name: "Card B", status: "error", message: "ログインに失敗しました" }],
+      },
+    ],
+    [
       "moneyforward_timeout",
       {
         code: "moneyforward_timeout",
