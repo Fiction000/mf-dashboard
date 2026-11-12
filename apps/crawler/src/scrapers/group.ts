@@ -2,6 +2,7 @@ import type { Group } from "@mf-dashboard/db/types";
 import { mfUrls } from "@mf-dashboard/meta/urls";
 import type { Page } from "playwright";
 import { debug, log, warn } from "../logger.js";
+import { gotoWithRetry } from "./navigation.js";
 
 /** 「グループ選択なし」を表す特別なID */
 export const NO_GROUP_ID = "0";
@@ -78,22 +79,8 @@ async function isGroupSelectorVisible(groupSelect: ReturnType<Page["locator"]>):
 }
 
 async function navigateToHomeWithRetry(page: Page): Promise<void> {
-  try {
-    await page.goto(mfUrls.home, {
-      waitUntil: "domcontentloaded",
-    });
-  } catch (err) {
-    if (page.isClosed()) throw err;
-    const message = err instanceof Error ? err.message : String(err);
-    if (!message.includes("net::ERR_ABORTED")) {
-      throw err;
-    }
-    // Retry once if navigation was aborted by a subsequent navigation.
-    await page.waitForTimeout(1000);
-    await page.goto(mfUrls.home, {
-      waitUntil: "domcontentloaded",
-    });
-  }
+  // MF can reload the page on its own; retry when that interrupts our goto.
+  await gotoWithRetry(page, mfUrls.home);
 }
 
 /**
