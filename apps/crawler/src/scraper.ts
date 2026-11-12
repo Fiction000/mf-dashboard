@@ -157,13 +157,30 @@ async function scrapeGlobalData(
         `Could not read per-account refresh status: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    const issues = accountSummary?.issues ?? [];
+    const confirmedIssues = accountSummary?.issues ?? [];
+    // A re-read that found no status rows confirms nothing; treat it like a failed re-read.
+    const reReadUsable = accountSummary !== null && accountSummary.checkedCount > 0;
+    // When /accounts could not be re-read, fall back to the accounts the wait loop saw as 更新中.
+    const issues: AccountIssue[] = reReadUsable
+      ? confirmedIssues
+      : refreshResult.incompleteAccounts.map((name) => ({
+          name,
+          status: "updating" as const,
+          message: "更新中",
+        }));
     const incompleteAccounts =
       issues.length > 0 ? issues.map(({ name }) => name) : refreshResult.incompleteAccounts;
-    const remainingCount =
-      issues.length > 0
-        ? issues.length
-        : (refreshResult.remainingCount ?? refreshResult.incompleteAccounts.length);
+    const remainingCount = reReadUsable
+      ? issues.length
+      : Math.max(
+          issues.length,
+          refreshResult.remainingCount ?? refreshResult.incompleteAccounts.length,
+        );
+    // The re-read of /accounts is fresher than the wait loop: all rows 正常 means the refresh finished.
+    const allConfirmedOk =
+      accountSummary !== null &&
+      confirmedIssues.length === 0 &&
+      (refreshResult.completed || reReadUsable);
 
     if (
       accountSummary &&
@@ -182,7 +199,7 @@ async function scrapeGlobalData(
       throw new Error(message);
     }
 
-    if (refreshResult.completed && issues.length === 0 && accountStatusUnknown) {
+    if (refreshResult.completed && accountStatusUnknown && issues.length === 0) {
       warn("口座ごとの更新状態を確認できませんでした");
       await progress.warnStep(
         refreshStep,
@@ -194,7 +211,7 @@ async function scrapeGlobalData(
         },
         { maxWaitMinutes: getMaxWaitMinutes(), remainingCount: 0, incompleteAccounts: [] },
       );
-    } else if (refreshResult.completed && issues.length === 0) {
+    } else if (allConfirmedOk) {
       await progress.completeStep(refreshStep, {
         remainingCount: 0,
         incompleteAccounts: [],
@@ -202,7 +219,7 @@ async function scrapeGlobalData(
     } else {
       // Some accounts did not finish or show an error. The crawl still succeeds with what it got;
       // only those accounts are reported.
-      reportAccountIssues(issues, issues.length === 0 ? remainingCount : 0);
+      reportAccountIssues(issues, Math.max(0, remainingCount - issues.length));
       const metadata = {
         maxWaitMinutes: getMaxWaitMinutes(),
         remainingCount,
