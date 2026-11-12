@@ -175,6 +175,8 @@ export interface RefreshResult {
   completed: boolean;
   incompleteAccounts: string[];
   remainingCount?: number;
+  /** Why the wait ended without completion: the wait limit, or the status page failing mid-wait. */
+  reason?: "timeout" | "wait_failed";
 }
 
 // --- Scraped Data ---

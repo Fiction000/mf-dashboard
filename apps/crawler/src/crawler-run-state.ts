@@ -15,6 +15,12 @@ export type CrawlerRunStepStatus =
   | "failed"
   | "skipped";
 
+export interface CrawlerRunAccountIssue {
+  name: string;
+  status: "updating" | "error";
+  message: string;
+}
+
 export type CrawlerRunReason =
   | { code: "auth_failed"; message: string }
   | {
@@ -22,6 +28,13 @@ export type CrawlerRunReason =
       message: string;
       maxWaitMinutes: number;
       incompleteAccounts: string[];
+      accountIssues?: CrawlerRunAccountIssue[];
+    }
+  | {
+      code: "refresh_incomplete";
+      message: string;
+      incompleteAccounts: string[];
+      accountIssues: CrawlerRunAccountIssue[];
     }
   | { code: "moneyforward_timeout"; message: string; operation: string; timeoutMs: number }
   | { code: "navigation_failed"; message: string; url: string }
@@ -140,6 +153,19 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function isAccountIssueList(value: unknown): value is CrawlerRunAccountIssue[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (issue) =>
+        isRecord(issue) &&
+        typeof issue.name === "string" &&
+        (issue.status === "updating" || issue.status === "error") &&
+        typeof issue.message === "string",
+    )
+  );
+}
+
 function isCrawlerRunReason(value: unknown): value is CrawlerRunReason {
   if (!isRecord(value) || typeof value.message !== "string") {
     return false;
@@ -151,8 +177,12 @@ function isCrawlerRunReason(value: unknown): value is CrawlerRunReason {
       return true;
     case "refresh_timeout":
       return (
-        isNonNegativeFiniteNumber(value.maxWaitMinutes) && isStringArray(value.incompleteAccounts)
+        isNonNegativeFiniteNumber(value.maxWaitMinutes) &&
+        isStringArray(value.incompleteAccounts) &&
+        (value.accountIssues === undefined || isAccountIssueList(value.accountIssues))
       );
+    case "refresh_incomplete":
+      return isStringArray(value.incompleteAccounts) && isAccountIssueList(value.accountIssues);
     case "moneyforward_timeout":
       return typeof value.operation === "string" && isNonNegativeFiniteNumber(value.timeoutMs);
     case "navigation_failed":
