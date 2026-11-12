@@ -53,6 +53,7 @@ function readReason(value: unknown): CrawlerRunReason | null {
     case "unknown_error":
       return { code: value.code, message: value.message };
     case "refresh_timeout":
+    case "refresh_not_observed":
       return isNonNegativeFiniteNumber(value.maxWaitMinutes) &&
         isStringArray(value.incompleteAccounts)
         ? {
