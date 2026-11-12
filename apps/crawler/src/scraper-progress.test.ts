@@ -460,6 +460,53 @@ describe("scraper progress", () => {
       expect(getRegisteredAccounts).toHaveBeenCalled();
     });
 
+    test("一括更新は終わったが口座ごとの状態を読めなければ、done にせず warning で残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({
+            code: "refresh_incomplete",
+            message: "口座ごとの更新状態を確認できませんでした",
+          }),
+        }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+    });
+
+    test("一括更新は終わったが口座一覧を開けなければ、run を失敗させる", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+      vi.mocked(getRegisteredAccounts).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).rejects.toThrow("net::ERR_CONNECTION_RESET");
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "registered_accounts", status: "failed" }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+    });
+
     test("全口座が成功なら報告を出さない", async () => {
       const progress = await newProgress();
       vi.mocked(clickRefreshButton).mockResolvedValue({ completed: true, incompleteAccounts: [] });
