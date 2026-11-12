@@ -119,7 +119,8 @@ describe("navigateToAccountsPage", () => {
   test.each([
     "page.goto: net::ERR_ABORTED at https://moneyforward.com/accounts",
     "page.goto: Timeout 30000ms exceeded.",
-  ])("一時的な遷移エラーを1回だけ再試行する: %s", async (message) => {
+    'page.goto: Navigation to "https://moneyforward.com/accounts" is interrupted by another navigation to "https://moneyforward.com/accounts"',
+  ])("一時的な遷移エラーを再試行する: %s", async (message) => {
     const goto = vi
       .fn<(...args: any[]) => any>()
       .mockRejectedValueOnce(new Error(message))
