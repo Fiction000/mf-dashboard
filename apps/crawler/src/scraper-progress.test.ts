@@ -507,6 +507,51 @@ describe("scraper progress", () => {
       );
     });
 
+    test("待機上限を超えても、再確認で全口座が正常なら done にする", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 3, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain("更新できなかった口座");
+    });
+
+    test("再確認に失敗しても、待機中に分かっていた口座名で報告する", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 2,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: {
+          incompleteAccounts: ["Bank A"],
+          accountIssues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
+      });
+      const warnings = JSON.stringify(loggerMocks.warn.mock.calls);
+      expect(warnings).toContain("Bank A: 更新中のまま");
+      expect(warnings).toContain("口座名を取得できなかった口座: 1件");
+    });
+
     test("全口座が成功なら報告を出さない", async () => {
       const progress = await newProgress();
       vi.mocked(clickRefreshButton).mockResolvedValue({ completed: true, incompleteAccounts: [] });
