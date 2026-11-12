@@ -321,7 +321,7 @@ describe("scraper progress", () => {
     );
   });
 
-  test("strict refresh timeout aborts before scraping data that would be saved", async () => {
+  test("REQUIRE_REFRESH_COMPLETE が残っていても、一部未完了なら止めずに取得を続ける", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",
       source: "test",
@@ -332,9 +332,9 @@ describe("scraper progress", () => {
       scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
         requireRefreshComplete: true,
       }),
-    ).rejects.toThrow("MoneyForward refresh did not complete");
+    ).resolves.toBeDefined();
 
-    expect(getRegisteredAccounts).not.toHaveBeenCalled();
+    expect(getRegisteredAccounts).toHaveBeenCalled();
     expect(progress.getState().timeline).toContainEqual(
       expect.objectContaining({
         step: "moneyforward_refresh",
