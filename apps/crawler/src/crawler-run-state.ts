@@ -18,7 +18,7 @@ export type CrawlerRunStepStatus =
 export type CrawlerRunReason =
   | { code: "auth_failed"; message: string }
   | {
-      code: "refresh_timeout";
+      code: "refresh_timeout" | "refresh_not_observed";
       message: string;
       maxWaitMinutes: number;
       incompleteAccounts: string[];
@@ -150,6 +150,7 @@ function isCrawlerRunReason(value: unknown): value is CrawlerRunReason {
     case "unknown_error":
       return true;
     case "refresh_timeout":
+    case "refresh_not_observed":
       return (
         isNonNegativeFiniteNumber(value.maxWaitMinutes) && isStringArray(value.incompleteAccounts)
       );

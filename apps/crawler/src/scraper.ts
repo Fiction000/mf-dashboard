@@ -121,11 +121,14 @@ async function scrapeGlobalData(
           incompleteAccounts: [],
         });
       } else {
+        const notObserved = refreshResult.reason === "not_observed";
         await progress.warnStep(
           refreshStep,
           {
-            code: "refresh_timeout",
-            message: "金融機関の一括更新が待機時間を超えました",
+            code: notObserved ? "refresh_not_observed" : "refresh_timeout",
+            message: notObserved
+              ? "金融機関の一括更新開始を確認できませんでした"
+              : "金融機関の一括更新が待機時間を超えました",
             maxWaitMinutes: getMaxWaitMinutes(),
             incompleteAccounts: refreshResult.incompleteAccounts,
           },

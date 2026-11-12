@@ -297,6 +297,32 @@ describe("scraper progress", () => {
     );
   });
 
+  test("refresh not_observed を refresh_not_observed warning にして続行する", async () => {
+    const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+      id: "run-not-observed",
+      source: "test",
+      startedAt: "2026-07-01T00:00:00.000Z",
+    });
+    vi.mocked(clickRefreshButton).mockResolvedValue({
+      completed: false,
+      incompleteAccounts: [],
+      remainingCount: 0,
+      reason: "not_observed",
+    });
+
+    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+    expect(progress.getState().timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({ code: "refresh_not_observed" }),
+        }),
+      ]),
+    );
+  });
+
   test("refresh timeout を warning にし、未完了機関と group name を保持する", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",

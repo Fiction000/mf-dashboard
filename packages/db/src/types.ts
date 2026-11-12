@@ -175,6 +175,7 @@ export interface RefreshResult {
   completed: boolean;
   incompleteAccounts: string[];
   remainingCount?: number;
+  reason?: "timeout" | "not_observed";
 }
 
 // --- Scraped Data ---

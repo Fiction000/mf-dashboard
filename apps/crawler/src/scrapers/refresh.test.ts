@@ -204,9 +204,20 @@ describe("clickRefreshButton", () => {
       loadingResponse([false]),
     ]);
     try {
+      const waiting: { incompleteAccounts: string[]; remainingCount: number }[] = [];
       await expect(
-        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+        clickRefreshButton(page, {
+          maxWaitMinutes: 0.001,
+          pollIntervalMs: 10,
+          onWaiting: ({ incompleteAccounts, remainingCount }) => {
+            waiting.push({ incompleteAccounts, remainingCount });
+          },
+        }),
       ).resolves.toEqual({ completed: true, incompleteAccounts: [] });
+      expect(waiting).toEqual([
+        { incompleteAccounts: [], remainingCount: 1 },
+        { incompleteAccounts: [], remainingCount: 0 },
+      ]);
       expect(click).toHaveBeenCalledOnce();
       expect(get).toHaveBeenCalledTimes(2);
       expect(get).toHaveBeenCalledWith("https://moneyforward.com/accounts/loading_statuses", {
@@ -229,7 +240,7 @@ describe("clickRefreshButton", () => {
         remainingCount: 0,
         reason: "not_observed",
       });
-      expect(get).toHaveBeenCalledTimes(3);
+      expect(get).toHaveBeenCalledTimes(4);
       expect(goto.mock.calls.map(([url]) => url)).toEqual(["https://moneyforward.com/"]);
     } finally {
       dateNow.mockRestore();
@@ -241,7 +252,12 @@ describe("clickRefreshButton", () => {
     try {
       await expect(
         clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 5 }),
-      ).resolves.toEqual({ completed: false, incompleteAccounts: ["Bank A"], remainingCount: 1 });
+      ).resolves.toEqual({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+      });
       expect(get).toHaveBeenCalled();
       expect(goto.mock.calls.map(([url]) => url)).toEqual([
         "https://moneyforward.com/",
@@ -261,7 +277,12 @@ describe("clickRefreshButton", () => {
       });
       await expect(
         clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 5 }),
-      ).resolves.toEqual({ completed: false, incompleteAccounts: [], remainingCount: 1 });
+      ).resolves.toEqual({
+        completed: false,
+        incompleteAccounts: [],
+        remainingCount: 1,
+        reason: "timeout",
+      });
       expect(goto.mock.calls.map(([url]) => url)).toEqual([
         "https://moneyforward.com/",
         "https://moneyforward.com/accounts",
@@ -286,6 +307,27 @@ describe("clickRefreshButton", () => {
       await expect(
         clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
       ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status/);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("login redirect and non-JSON responses are fatal", async () => {
+    const { dateNow, get, page } = makePage([loadingResponse([false])]);
+    try {
+      const redirected = loadingResponse([false]);
+      redirected.url = () => "https://moneyforward.com/users/sign_in";
+      get.mockResolvedValueOnce(redirected);
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+      ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status 200/);
+
+      const html = loadingResponse([false]);
+      html.headers = () => ({ "content-type": "text/html" });
+      get.mockResolvedValueOnce(html);
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+      ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status 200/);
     } finally {
       dateNow.mockRestore();
     }
