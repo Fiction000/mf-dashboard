@@ -3,7 +3,7 @@ import type { CashFlowSummary, CashFlowItem } from "@mf-dashboard/db/types";
 import { mfUrls } from "@mf-dashboard/meta/urls";
 import type { Locator, Page } from "playwright";
 import { getHistoryMonth } from "../history-months.js";
-import { log, debug } from "../logger.js";
+import { log, debug, warn } from "../logger.js";
 import { parseJapaneseNumber, convertDateToIso } from "../parsers.js";
 import type { CashFlowHistoryResult } from "../types.js";
 
@@ -451,6 +451,51 @@ async function getDisplayedCashFlowMonth(page: Page): Promise<string> {
   return (await detectMonth(page)).month;
 }
 
+const CASH_FLOW_REREAD_ATTEMPTS = 3;
+const CASH_FLOW_REREAD_SETTLE_MS = 2000;
+
+interface CashFlowRereadDeps {
+  extract?: (page: Page) => ReturnType<typeof extractCashFlowFromPage>;
+  settle?: (page: Page) => Promise<void>;
+  displayedMonth?: (page: Page) => Promise<string>;
+}
+
+/**
+ * While an account is still refreshing, MoneyForward redraws pages on its own, so a transaction
+ * row can be read mid-redraw with empty cells. Re-read the same month a few times before failing;
+ * stop at once if the redraw moved the page to a different month or the error is something else.
+ */
+export async function extractCashFlowWithReread(
+  page: Page,
+  targetMonth: string,
+  deps: CashFlowRereadDeps = {},
+): ReturnType<typeof extractCashFlowFromPage> {
+  const extract = deps.extract ?? extractCashFlowFromPage;
+  const settle =
+    deps.settle ??
+    (async (target: Page) => {
+      await target.waitForTimeout(CASH_FLOW_REREAD_SETTLE_MS);
+      await target.locator("#cf-detail-table").waitFor({ state: "visible", timeout: 10000 });
+    });
+  const displayedMonth = deps.displayedMonth ?? getDisplayedCashFlowMonth;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await extract(page);
+    } catch (error) {
+      const isEmptyRow =
+        error instanceof Error && error.message.startsWith("Incomplete cash flow transaction row");
+      if (!isEmptyRow || attempt >= CASH_FLOW_REREAD_ATTEMPTS) throw error;
+      const month = await displayedMonth(page).catch(() => null);
+      if (month !== targetMonth) throw error;
+      warn(
+        `  ${targetMonth}: transaction row was empty, re-reading (${attempt}/${CASH_FLOW_REREAD_ATTEMPTS - 1})`,
+      );
+      await settle(page);
+    }
+  }
+}
+
 /**
  * 過去N月分の家計簿データを取得
  * UIの前月ボタンをクリックして月を切り替えながら取得
@@ -478,7 +523,7 @@ export async function scrapeCashFlowHistory(
     );
     await callbacks.onMonthStart?.(targetMonth);
     try {
-      const data = await extractCashFlowFromPage(page);
+      const data = await extractCashFlowWithReread(page, targetMonth);
       results.push({ month: data.month, progressMonth: targetMonth, data });
       log(`  ${data.month}: ${data.items.length} transactions`);
 

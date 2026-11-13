@@ -8,6 +8,7 @@ import {
   resolveCashFlowDate,
   resolveCashFlowPeriod,
   scrapeCashFlowHistory,
+  extractCashFlowWithReread,
   verifyCashFlowRowsComplete,
 } from "./cash-flow-history.js";
 
@@ -552,5 +553,69 @@ describe("parseDetailRow", () => {
     } as unknown as Locator;
 
     await expect(parseDetailRow(row, 2026)).rejects.toThrow("Incomplete cash flow transaction row");
+  });
+});
+
+describe("extractCashFlowWithReread", () => {
+  const data = { month: "2026-11" } as Awaited<ReturnType<typeof extractCashFlowFromPage>>;
+  const incomplete = () =>
+    new Error("Incomplete cash flow transaction row (date, description, amount)");
+
+  test("MF の再描画で行が一時的に空なら、同じ月を読み直して成功する", async () => {
+    const extract = vi
+      .fn<() => Promise<typeof data>>()
+      .mockRejectedValueOnce(incomplete())
+      .mockResolvedValueOnce(data);
+    const page = {} as Page;
+
+    await expect(
+      extractCashFlowWithReread(page, "2026-11", {
+        extract,
+        settle: async () => undefined,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).resolves.toBe(data);
+    expect(extract).toHaveBeenCalledTimes(2);
+  });
+
+  test("読み直しても空のままなら、元のエラーで失敗する", async () => {
+    const extract = vi.fn<() => Promise<typeof data>>().mockRejectedValue(incomplete());
+
+    await expect(
+      extractCashFlowWithReread({} as Page, "2026-11", {
+        extract,
+        settle: async () => undefined,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).rejects.toThrow("Incomplete cash flow transaction row");
+    expect(extract).toHaveBeenCalledTimes(3);
+  });
+
+  test("再描画で別の月に戻っていたら、読み直さずに失敗する", async () => {
+    const extract = vi.fn<() => Promise<typeof data>>().mockRejectedValue(incomplete());
+
+    await expect(
+      extractCashFlowWithReread({} as Page, "2026-10", {
+        extract,
+        settle: async () => undefined,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).rejects.toThrow("Incomplete cash flow transaction row");
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
+
+  test("行が空になる以外のエラーは読み直さない", async () => {
+    const extract = vi
+      .fn<() => Promise<typeof data>>()
+      .mockRejectedValue(new Error("Could not verify the complete cash flow summary"));
+
+    await expect(
+      extractCashFlowWithReread({} as Page, "2026-11", {
+        extract,
+        settle: async () => undefined,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).rejects.toThrow("complete cash flow summary");
+    expect(extract).toHaveBeenCalledTimes(1);
   });
 });
