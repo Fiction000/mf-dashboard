@@ -479,10 +479,13 @@ export async function extractCashFlowWithReread(
     });
   const displayedMonth = deps.displayedMonth ?? getDisplayedCashFlowMonth;
 
+  let firstError: unknown = null;
   for (let attempt = 1; ; attempt++) {
+    let data: Awaited<ReturnType<typeof extractCashFlowFromPage>>;
     try {
-      return await extract(page);
+      data = await extract(page);
     } catch (error) {
+      firstError ??= error;
       const isEmptyRow =
         error instanceof Error && error.message.startsWith("Incomplete cash flow transaction row");
       if (!isEmptyRow || attempt >= CASH_FLOW_REREAD_ATTEMPTS) throw error;
@@ -495,7 +498,12 @@ export async function extractCashFlowWithReread(
       // The redraw may land on another month while we wait; never read that as the target month.
       const settledMonth = await displayedMonth(page).catch(() => null);
       if (settledMonth !== targetMonth) throw error;
+      continue;
     }
+    // On a re-read, the page may have been redrawn to another month after the last check;
+    // only accept data that is actually for the target month.
+    if (firstError !== null && data.month !== targetMonth) throw firstError;
+    return data;
   }
 }
 

@@ -621,6 +621,24 @@ describe("extractCashFlowWithReread", () => {
     expect(extract).toHaveBeenCalledTimes(1);
   });
 
+  test("読み直しの直前に別の月へ描き直されても、その月のデータを返さずに失敗する", async () => {
+    const otherMonth = { month: "2026-10" } as typeof data;
+    const extract = vi
+      .fn<() => Promise<typeof data>>()
+      .mockRejectedValueOnce(incomplete())
+      .mockResolvedValueOnce(otherMonth);
+    const settle = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      extractCashFlowWithReread({} as Page, "2026-11", {
+        extract,
+        settle,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).rejects.toThrow("Incomplete cash flow transaction row");
+    expect(settle).toHaveBeenCalledTimes(1);
+  });
+
   test("行が空になる以外のエラーは読み直さない", async () => {
     const extract = vi
       .fn<() => Promise<typeof data>>()
