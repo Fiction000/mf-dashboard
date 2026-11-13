@@ -639,6 +639,21 @@ describe("extractCashFlowWithReread", () => {
     expect(settle).toHaveBeenCalledTimes(1);
   });
 
+  test("最初の読み取りで別の月のデータが返ったら、その月として保存せずに失敗する", async () => {
+    const extract = vi
+      .fn<() => Promise<typeof data>>()
+      .mockResolvedValue({ month: "2026-10" } as typeof data);
+
+    await expect(
+      extractCashFlowWithReread({} as Page, "2026-11", {
+        extract,
+        settle: async () => undefined,
+        displayedMonth: async () => "2026-11",
+      }),
+    ).rejects.toThrow("Cash flow page showed 2026-10 while reading 2026-11");
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
+
   test("行が空になる以外のエラーは読み直さない", async () => {
     const extract = vi
       .fn<() => Promise<typeof data>>()

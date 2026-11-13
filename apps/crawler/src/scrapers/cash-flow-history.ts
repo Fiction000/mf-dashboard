@@ -500,9 +500,12 @@ export async function extractCashFlowWithReread(
       if (settledMonth !== targetMonth) throw error;
       continue;
     }
-    // On a re-read, the page may have been redrawn to another month after the last check;
-    // only accept data that is actually for the target month.
-    if (firstError !== null && data.month !== targetMonth) throw firstError;
+    // MF may redraw to another month between any check and the read; only accept data that is
+    // actually for the target month, so another month is never stored under this one.
+    if (data.month !== targetMonth) {
+      if (firstError !== null) throw firstError;
+      throw new Error(`Cash flow page showed ${data.month} while reading ${targetMonth}`);
+    }
     return data;
   }
 }
