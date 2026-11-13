@@ -327,6 +327,8 @@ describe("scraper progress", () => {
       source: "test",
       startedAt: "2026-07-01T00:00:00.000Z",
     });
+    // The /accounts re-read finds no status rows, so the wait loop's timeout is reported.
+    vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
 
     await expect(
       scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
