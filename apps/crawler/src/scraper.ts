@@ -177,10 +177,8 @@ async function scrapeGlobalData(
           refreshResult.remainingCount ?? refreshResult.incompleteAccounts.length,
         );
     // The re-read of /accounts is fresher than the wait loop: all rows 正常 means the refresh finished.
-    const allConfirmedOk =
-      accountSummary !== null &&
-      confirmedIssues.length === 0 &&
-      (refreshResult.completed || reReadUsable);
+    // Zero status rows (login redirect, DOM change) confirms nothing, so it is never success.
+    const allConfirmedOk = reReadUsable && confirmedIssues.length === 0;
 
     if (
       accountSummary &&
@@ -199,7 +197,7 @@ async function scrapeGlobalData(
       throw new Error(message);
     }
 
-    if (refreshResult.completed && accountStatusUnknown && issues.length === 0) {
+    if (refreshResult.completed && !reReadUsable && issues.length === 0) {
       warn("口座ごとの更新状態を確認できませんでした");
       await progress.warnStep(
         refreshStep,
