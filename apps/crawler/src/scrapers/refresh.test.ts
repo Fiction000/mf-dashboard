@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { describe, expect, test, vi } from "vitest";
 import {
+  classifyAccountIssues,
   clickRefreshButton,
   getMaxWaitMinutes,
   getRefreshStatus,
@@ -174,5 +175,65 @@ describe("clickRefreshButton", () => {
       clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
     ).resolves.toEqual({ completed: true, incompleteAccounts: [] });
     expect(click).toHaveBeenCalledOnce();
+  });
+});
+
+describe("classifyAccountIssues", () => {
+  test("正常と停止中は数えず、更新中とエラー表示の口座だけを状態付きで返す", () => {
+    expect(
+      classifyAccountIssues([
+        { name: " Bank A ", statuses: ["正常"] },
+        { name: "Bank B", statuses: ["更新中"] },
+        { name: "Card C", statuses: [" 重要なお知らせがあります "] },
+        { name: "Old D", statuses: ["取得を停止しています"] },
+        { name: "Empty E", statuses: [" "] },
+      ]),
+    ).toEqual({
+      checkedCount: 3,
+      issues: [
+        { name: "Bank B", status: "updating", message: "更新中" },
+        { name: "Card C", status: "error", message: "重要なお知らせがあります" },
+      ],
+    });
+  });
+
+  test("名前のない行は「名称不明」として残す", () => {
+    expect(classifyAccountIssues([{ name: null, statuses: ["エラー"] }]).issues).toEqual([
+      { name: "名称不明", status: "error", message: "エラー" },
+    ]);
+  });
+});
+
+describe("clickRefreshButton の更新待ち", () => {
+  test("一括更新を押したあと /accounts への遷移が失敗しても throw せず wait_failed を返す", async () => {
+    const click = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const goto = vi.fn<(url: string) => Promise<null>>().mockImplementation(async (url) => {
+      if (url.endsWith("/accounts")) throw new Error("page.goto: Page crashed");
+      return null;
+    });
+    const page = {
+      goto,
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+      waitForTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      locator: vi.fn<(selector: string) => any>(() => ({ first: () => ({ click }) })),
+    } as unknown as Page;
+
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
+    ).resolves.toMatchObject({ completed: false, reason: "wait_failed" });
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  test("一括更新ボタンを押す前の失敗はそのまま throw する", async () => {
+    const page = {
+      goto: vi
+        .fn<() => Promise<null>>()
+        .mockRejectedValue(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED")),
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+    } as unknown as Page;
+
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
+    ).rejects.toThrow("ERR_NAME_NOT_RESOLVED");
   });
 });
