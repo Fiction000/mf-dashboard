@@ -492,6 +492,9 @@ export async function extractCashFlowWithReread(
         `  ${targetMonth}: transaction row was empty, re-reading (${attempt}/${CASH_FLOW_REREAD_ATTEMPTS - 1})`,
       );
       await settle(page);
+      // The redraw may land on another month while we wait; never read that as the target month.
+      const settledMonth = await displayedMonth(page).catch(() => null);
+      if (settledMonth !== targetMonth) throw error;
     }
   }
 }
