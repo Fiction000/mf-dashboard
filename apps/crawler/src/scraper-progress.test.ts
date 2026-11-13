@@ -70,7 +70,7 @@ beforeEach(async () => {
     completed: false,
     incompleteAccounts: ["Institution A", "Institution B"],
   });
-  vi.mocked(getAccountIssues).mockResolvedValue({ issues: [], checkedCount: 0 });
+  vi.mocked(getAccountIssues).mockResolvedValue({ issues: [], checkedCount: 1 });
   vi.mocked(getRegisteredAccounts).mockResolvedValue({ accounts: [] });
   vi.mocked(getManualHoldingAccountMap).mockResolvedValue(new Map());
   vi.mocked(getLinkedAccountDetailSource).mockResolvedValue({
@@ -351,6 +351,8 @@ describe("scraper progress", () => {
       startedAt: "2026-07-01T00:00:00.000Z",
     });
     let waitingState = progress.getState();
+    // The /accounts re-read finds no status rows, so the wait loop's view is reported.
+    vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
     vi.mocked(clickRefreshButton).mockImplementation(async (_page, options) => {
       await options?.onWaiting?.({
         elapsedSeconds: 30,
@@ -595,6 +597,29 @@ describe("scraper progress", () => {
       const warnings = JSON.stringify(loggerMocks.warn.mock.calls);
       expect(warnings).toContain("Bank A: 更新中のまま");
       expect(warnings).toContain("口座名を取得できなかった口座: 1件");
+    });
+
+    test("一括更新は終わったが口座の状態行が1件も読めなければ、done にせず warning で残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({ message: "口座ごとの更新状態を確認できませんでした" }),
+        }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
     });
 
     test("全口座が成功なら報告を出さない", async () => {
