@@ -299,62 +299,46 @@ describe("scraper progress", () => {
     );
   });
 
-  test("strict mode waits for refresh completion before scraping accounts", async () => {
+  test("refresh not_observed を許可済み refresh_incomplete warning にして続行する", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
-      id: "run-a",
+      id: "run-not-observed",
       source: "test",
       startedAt: "2026-07-01T00:00:00.000Z",
     });
     vi.mocked(clickRefreshButton).mockResolvedValue({
-      completed: true,
+      completed: false,
       incompleteAccounts: [],
+      remainingCount: 0,
+      reason: "not_observed",
     });
 
-    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
-      requireRefreshComplete: true,
-    });
+    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
 
-    expect(clickRefreshButton).toHaveBeenCalledOnce();
-    expect(getRegisteredAccounts).toHaveBeenCalled();
-    expect(vi.mocked(clickRefreshButton).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(getRegisteredAccounts).mock.invocationCallOrder[0]!,
+    expect(progress.getState().timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({ code: "refresh_incomplete" }),
+        }),
+      ]),
     );
   });
 
-  test("REQUIRE_REFRESH_COMPLETE が残っていても、一部未完了なら止めずに取得を続ける", async () => {
-    const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
-      id: "run-a",
-      source: "test",
-      startedAt: "2026-07-01T00:00:00.000Z",
-    });
-    // The /accounts re-read finds no status rows, so the wait loop's timeout is reported.
-    vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
-
-    await expect(
-      scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
-        requireRefreshComplete: true,
-      }),
-    ).resolves.toBeDefined();
-
-    expect(getRegisteredAccounts).toHaveBeenCalled();
-    expect(progress.getState().timeline).toContainEqual(
-      expect.objectContaining({
-        step: "moneyforward_refresh",
-        status: "warning",
-        reason: expect.objectContaining({ code: "refresh_timeout" }),
-      }),
-    );
-  });
-
-  test("refresh timeout を warning にし、未完了機関と group name を保持する", async () => {
+  test("再確認で全口座が更新中なら refresh step と run を failed にする", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",
       source: "test",
       startedAt: "2026-07-01T00:00:00.000Z",
     });
     let waitingState = progress.getState();
-    // The /accounts re-read finds no status rows, so the wait loop's view is reported.
-    vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
+    vi.mocked(getAccountIssues).mockResolvedValue({
+      checkedCount: 2,
+      issues: [
+        { name: "Institution A", status: "updating", message: "更新中" },
+        { name: "Institution B", status: "updating", message: "更新中" },
+      ],
+    });
     vi.mocked(clickRefreshButton).mockImplementation(async (_page, options) => {
       await options?.onWaiting?.({
         elapsedSeconds: 30,
@@ -367,10 +351,14 @@ describe("scraper progress", () => {
       return {
         completed: false,
         incompleteAccounts: ["Institution A", "Institution B"],
+        remainingCount: 2,
+        reason: "timeout",
       };
     });
 
-    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+    await expect(
+      scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+    ).rejects.toThrow(/All MoneyForward accounts failed to refresh/);
 
     expect(waitingState).toMatchObject({
       current: {
@@ -383,25 +371,12 @@ describe("scraper progress", () => {
         }),
       },
     });
-    expect(progress.getState().timeline).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          step: "moneyforward_refresh",
-          status: "warning",
-          reason: expect.objectContaining({ code: "refresh_timeout" }),
-          metadata: expect.objectContaining({
-            kind: "refresh",
-            maxWaitMinutes: 20,
-            remainingAccounts: 2,
-            incompleteAccounts: ["Institution A", "Institution B"],
-          }),
-        }),
-        expect.objectContaining({
-          step: "group_data",
-          status: "done",
-          metadata: { kind: "group", groupName: "Group A" },
-        }),
-      ]),
+    expect(progress.getState().timeline).toContainEqual(
+      expect.objectContaining({
+        step: "moneyforward_refresh",
+        status: "failed",
+        reason: expect.objectContaining({ code: "refresh_incomplete" }),
+      }),
     );
   });
 
@@ -572,6 +547,35 @@ describe("scraper progress", () => {
         expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
       );
       expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain("更新できなかった口座");
+    });
+
+    test("待機上限に達し再確認で状態行が0件なら、既知の口座と不明件数を warning に残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 2,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: {
+          code: "refresh_timeout",
+          incompleteAccounts: ["Bank A"],
+          accountIssues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
+        metadata: expect.objectContaining({ remainingAccounts: 2 }),
+      });
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).toContain(
+        "口座名を取得できなかった口座: 1件",
+      );
     });
 
     test("再確認に失敗しても、待機中に分かっていた口座名で報告する", async () => {

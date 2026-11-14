@@ -139,23 +139,29 @@ async function scrapeGlobalData(
             ...waiting,
           }),
       });
+      if (refreshResult.completed) {
+        await progress.completeStep(refreshStep, {
+          remainingCount: 0,
+          incompleteAccounts: [],
+        });
+      }
     } catch (error) {
       // The bulk refresh could not even be requested (home page or button unavailable).
       await progress.failStep(refreshStep, normalizeCrawlerError(error, "refresh_failed"));
       throw error;
     }
 
-    let accountSummary: AccountIssueSummary | null = null;
-    let accountStatusUnknown = false;
-    try {
-      accountSummary = await getAccountIssues(page);
-    } catch (error) {
-      // Never report "done" without per-account confirmation. If /accounts itself is unreadable,
-      // the registered_accounts step below fails the run.
-      accountStatusUnknown = true;
-      warn(
-        `Could not read per-account refresh status: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    let accountSummary: AccountIssueSummary | null = refreshResult.accountSummary ?? null;
+    if (!refreshResult.accountStatusChecked) {
+      try {
+        accountSummary = await getAccountIssues(page);
+      } catch (error) {
+        // Never report "done" without per-account confirmation. If /accounts itself is unreadable,
+        // the registered_accounts step below fails the run.
+        warn(
+          `Could not read per-account refresh status: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     const confirmedIssues = accountSummary?.issues ?? [];
     // A re-read that found no status rows confirms nothing; treat it like a failed re-read.
@@ -209,7 +215,7 @@ async function scrapeGlobalData(
         },
         { maxWaitMinutes: getMaxWaitMinutes(), remainingCount: 0, incompleteAccounts: [] },
       );
-    } else if (allConfirmedOk) {
+    } else if (allConfirmedOk && refreshResult.reason !== "not_observed") {
       await progress.completeStep(refreshStep, {
         remainingCount: 0,
         incompleteAccounts: [],
@@ -225,7 +231,7 @@ async function scrapeGlobalData(
       };
       await progress.warnStep(
         refreshStep,
-        !refreshResult.completed && refreshResult.reason !== "wait_failed"
+        !refreshResult.completed && refreshResult.reason === "timeout"
           ? {
               code: "refresh_timeout",
               message: "金融機関の一括更新が待機時間を超えました",
@@ -235,7 +241,10 @@ async function scrapeGlobalData(
             }
           : {
               code: "refresh_incomplete",
-              message: "一部の金融機関が更新できませんでした",
+              message:
+                refreshResult.reason === "not_observed"
+                  ? "金融機関の一括更新開始を確認できませんでした"
+                  : "一部の金融機関が更新できませんでした",
               incompleteAccounts,
               accountIssues: issues,
             },
