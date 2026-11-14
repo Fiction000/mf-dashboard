@@ -325,7 +325,7 @@ describe("scraper progress", () => {
     );
   });
 
-  test("再確認で全口座が更新中なら refresh step と run を failed にする", async () => {
+  test("旧WIP期待を更新: 再確認で全口座が問題状態なら run を failed にする", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",
       source: "test",
