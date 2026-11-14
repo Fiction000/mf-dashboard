@@ -152,29 +152,193 @@ describe("navigateToAccountsPage", () => {
 });
 
 describe("clickRefreshButton", () => {
-  test("ホームが networkidle にならなくても一括更新を押して完了まで進む", async () => {
+  const loadingResponse = (loading: boolean[], status = 200) => ({
+    status: () => status,
+    headers: () => ({ "content-type": "application/json" }),
+    url: () => "https://moneyforward.com/accounts/loading_statuses",
+    json: vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValue(
+        loading.map((isLoading, index) => ({ id: "9007199254740993" + index, loading: isLoading })),
+      ),
+  });
+
+  function makePage(responses: ReturnType<typeof loadingResponse>[]) {
     const click = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    const statusRows = { count: vi.fn<() => Promise<number>>().mockResolvedValue(0) };
-    const page = {
-      goto: vi.fn<(...args: any[]) => any>().mockResolvedValue(null),
-      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
-      waitForLoadState: vi
-        .fn<(state?: string) => Promise<void>>()
-        .mockImplementation(async (state) => {
-          if (state === "networkidle") {
-            throw new Error("page.waitForLoadState: Timeout 30000ms exceeded.");
+    const goto = vi.fn<(...args: any[]) => any>().mockResolvedValue(null);
+    const get = vi.fn<(...args: any[]) => any>();
+    for (const response of responses) get.mockResolvedValueOnce(response);
+    if (responses.length > 0) get.mockResolvedValue(responses[responses.length - 1]);
+
+    const rows = {
+      count: vi.fn<() => Promise<number>>().mockResolvedValue(1),
+      nth: vi.fn<() => any>().mockReturnValue({
+        locator: (selector: string) => {
+          if (selector === "td.account-status") {
+            return { allTextContents: async () => ["更新中"] };
           }
-        }),
-      waitForTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+          if (selector === "td.service a") {
+            return { first: () => ({ count: async () => 1, textContent: async () => "Bank A" }) };
+          }
+          return { first: () => ({ textContent: async () => "Bank A" }) };
+        },
+      }),
+    };
+    const now = { value: 0 };
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now.value);
+    const page = {
+      goto,
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+      request: { get },
+      waitForTimeout: vi.fn<(ms: number) => Promise<void>>().mockImplementation(async (ms) => {
+        now.value += ms;
+      }),
       locator: vi.fn<(selector: string) => any>((selector) =>
-        selector === 'a:has-text("一括更新")' ? { first: () => ({ click }) } : statusRows,
+        selector === 'a:has-text("一括更新")' ? { first: () => ({ click }) } : rows,
       ),
     } as unknown as Page;
+    return { click, dateNow, get, goto, page };
+  }
 
-    await expect(
-      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
-    ).resolves.toEqual({ completed: true, incompleteAccounts: [] });
-    expect(click).toHaveBeenCalledOnce();
+  test("loadingを観測後に0件となれば完了し、polling中にaccountsへ遷移しない", async () => {
+    const { click, dateNow, get, goto, page } = makePage([
+      loadingResponse([true]),
+      loadingResponse([false]),
+    ]);
+    try {
+      const waiting: { incompleteAccounts: string[]; remainingCount: number }[] = [];
+      await expect(
+        clickRefreshButton(page, {
+          maxWaitMinutes: 0.001,
+          pollIntervalMs: 10,
+          onWaiting: ({ incompleteAccounts, remainingCount }) => {
+            waiting.push({ incompleteAccounts, remainingCount });
+          },
+        }),
+      ).resolves.toEqual({ completed: true, incompleteAccounts: [] });
+      expect(waiting).toEqual([
+        { incompleteAccounts: [], remainingCount: 1 },
+        { incompleteAccounts: [], remainingCount: 0 },
+      ]);
+      expect(click).toHaveBeenCalledOnce();
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(get).toHaveBeenCalledWith("https://moneyforward.com/accounts/loading_statuses", {
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      });
+      expect(goto.mock.calls.map(([url]) => url)).toEqual(["https://moneyforward.com/"]);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("start window内にloadingが観測されなければnot_observedを返す", async () => {
+    const { dateNow, get, goto, page } = makePage([loadingResponse([false])]);
+    try {
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 25 }),
+      ).resolves.toEqual({
+        completed: false,
+        incompleteAccounts: [],
+        remainingCount: 0,
+        reason: "not_observed",
+      });
+      expect(get).toHaveBeenCalledTimes(4);
+      expect(goto.mock.calls.map(([url]) => url)).toEqual(["https://moneyforward.com/"]);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("timeout時にaccountsへ1回だけ遷移して更新中の名称を返す", async () => {
+    const { dateNow, get, goto, page } = makePage([loadingResponse([true])]);
+    try {
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 5 }),
+      ).resolves.toMatchObject({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+        accountStatusChecked: true,
+        accountSummary: {
+          checkedCount: 1,
+          issues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
+      });
+      expect(get).toHaveBeenCalled();
+      expect(goto.mock.calls.map(([url]) => url)).toEqual([
+        "https://moneyforward.com/",
+        "https://moneyforward.com/accounts",
+      ]);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("timeout時の名称取得に失敗してもloading件数を保って返す", async () => {
+    const { dateNow, goto, page } = makePage([loadingResponse([true])]);
+    try {
+      goto.mockImplementation(async (url: string) => {
+        if (url.endsWith("/accounts")) throw new Error("accounts visit failed");
+        return null;
+      });
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 5 }),
+      ).resolves.toEqual({
+        completed: false,
+        incompleteAccounts: [],
+        remainingCount: 1,
+        reason: "timeout",
+        accountStatusChecked: true,
+      });
+      expect(goto.mock.calls.map(([url]) => url)).toEqual([
+        "https://moneyforward.com/",
+        "https://moneyforward.com/accounts",
+      ]);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test.each([
+    [302, [{ id: "1", loading: true }]],
+    [500, [{ id: "1", loading: true }]],
+    [200, { id: "1", loading: true }],
+  ])("invalid endpoint response status=%s rejects", async (status, body) => {
+    const { dateNow, get, page } = makePage([loadingResponse([false])]);
+    try {
+      const response = {
+        ...loadingResponse([false], status),
+        json: vi.fn<() => Promise<unknown>>().mockResolvedValue(body),
+      };
+      get.mockResolvedValue(response);
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+      ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status/);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  test("login redirect and non-JSON responses are fatal", async () => {
+    const { dateNow, get, page } = makePage([loadingResponse([false])]);
+    try {
+      const redirected = loadingResponse([false]);
+      redirected.url = () => "https://moneyforward.com/users/sign_in";
+      get.mockResolvedValueOnce(redirected);
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+      ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status 200/);
+
+      const html = loadingResponse([false]);
+      html.headers = () => ({ "content-type": "text/html" });
+      get.mockResolvedValueOnce(html);
+      await expect(
+        clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10 }),
+      ).rejects.toThrow(/https:\/\/moneyforward\.com\/accounts\/loading_statuses.*status 200/);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });
 
@@ -205,23 +369,30 @@ describe("classifyAccountIssues", () => {
 });
 
 describe("clickRefreshButton の更新待ち", () => {
-  test("一括更新を押したあと /accounts への遷移が失敗しても throw せず wait_failed を返す", async () => {
+  test("polling中のwait failureはwait_failedにし、endpoint failureはthrowする", async () => {
     const click = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    const goto = vi.fn<(url: string) => Promise<null>>().mockImplementation(async (url) => {
-      if (url.endsWith("/accounts")) throw new Error("page.goto: Page crashed");
-      return null;
+    const get = vi.fn<() => Promise<unknown>>().mockResolvedValue({
+      status: () => 200,
+      headers: () => ({ "content-type": "application/json" }),
+      url: () => "https://moneyforward.com/accounts/loading_statuses",
+      json: async () => [{ id: "9007199254740993", loading: true }],
     });
     const page = {
-      goto,
+      goto: vi.fn<() => Promise<null>>().mockResolvedValue(null),
+      request: { get },
       isClosed: vi.fn<() => boolean>().mockReturnValue(false),
-      waitForTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      waitForTimeout: vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error("page crashed")),
       locator: vi.fn<(selector: string) => any>(() => ({ first: () => ({ click }) })),
     } as unknown as Page;
 
     await expect(
-      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 10 }),
     ).resolves.toMatchObject({ completed: false, reason: "wait_failed" });
-    expect(click).toHaveBeenCalledOnce();
+    get.mockRejectedValueOnce(new Error("network unavailable"));
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 10 }),
+    ).rejects.toThrow(/GET https:\/\/moneyforward\.com\/accounts\/loading_statuses/);
+    expect(click).toHaveBeenCalledTimes(2);
   });
 
   test("一括更新ボタンを押す前の失敗はそのまま throw する", async () => {

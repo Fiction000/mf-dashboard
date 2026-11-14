@@ -1,4 +1,4 @@
-import type { RefreshResult } from "@mf-dashboard/db/types";
+import type { RefreshAccountIssue, RefreshResult } from "@mf-dashboard/db/types";
 import { mfUrls } from "@mf-dashboard/meta/urls";
 import type { Page } from "playwright";
 import { debug, info, warn } from "../logger.js";
@@ -45,13 +45,7 @@ export async function getRefreshStatus(
   return summarizeRefreshRows(refreshRows);
 }
 
-type AccountIssueStatus = "updating" | "error";
-
-export interface AccountIssue {
-  name: string;
-  status: AccountIssueStatus;
-  message: string;
-}
+export type AccountIssue = RefreshAccountIssue;
 
 export interface AccountIssueSummary {
   /** Accounts that a refresh applies to (正常・更新中・エラー). 停止中 and blank rows are not counted. */
@@ -90,8 +84,11 @@ export function classifyAccountIssues(rows: readonly RefreshStatusRow[]): Accoun
 }
 
 /** Read every account's refresh state from /accounts after the bulk refresh. */
-export async function getAccountIssues(page: Page): Promise<AccountIssueSummary> {
-  await navigateToAccountsPage(page);
+export async function getAccountIssues(
+  page: Page,
+  options: { alreadyOnAccountsPage?: boolean } = {},
+): Promise<AccountIssueSummary> {
+  if (!options.alreadyOnAccountsPage) await navigateToAccountsPage(page);
   const rows = page.locator("#account-table tr:has(td.account-status)");
   const count = await rows.count();
   const statusRows: RefreshStatusRow[] = [];
@@ -147,7 +144,72 @@ interface RefreshWaitProgress {
 interface RefreshOptions {
   maxWaitMinutes?: number;
   pollIntervalMs?: number;
+  startWindowMs?: number;
   onWaiting?: (progress: RefreshWaitProgress) => Promise<void> | void;
+}
+
+const LOADING_STATUSES_URL = "https://moneyforward.com/accounts/loading_statuses";
+const REFRESH_START_WINDOW_MS = 60000;
+
+async function getLoadingCount(page: Page): Promise<number> {
+  let response;
+  try {
+    response = await page.request.get(LOADING_STATUSES_URL, {
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+  } catch (error) {
+    throw new Error(
+      `GET ${LOADING_STATUSES_URL} failed with status unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const status = response.status();
+  const responseUrl = response.url();
+  const responsePath = (() => {
+    try {
+      const url = new URL(responseUrl);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return responseUrl;
+    }
+  })();
+  if (status !== 200 || responsePath !== LOADING_STATUSES_URL) {
+    throw new Error(
+      `GET ${LOADING_STATUSES_URL} failed with status ${status} (response URL: ${responseUrl})`,
+    );
+  }
+
+  const contentType = Object.entries(response.headers()).find(
+    ([name]) => name.toLowerCase() === "content-type",
+  )?.[1];
+  if (!contentType?.toLowerCase().includes("application/json")) {
+    throw new Error(
+      `GET ${LOADING_STATUSES_URL} failed with status ${status}: expected application/json`,
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`GET ${LOADING_STATUSES_URL} failed with status ${status}: invalid JSON`);
+  }
+  if (!Array.isArray(body) || body.some((entry: unknown) => !isLoadingStatus(entry))) {
+    throw new Error(
+      `GET ${LOADING_STATUSES_URL} failed with status ${status}: expected an array of loading statuses`,
+    );
+  }
+
+  return body.filter((entry: { loading: boolean }) => entry.loading).length;
+}
+
+function isLoadingStatus(value: unknown): value is { loading: boolean } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "loading" in value &&
+    typeof value.loading === "boolean"
+  );
 }
 
 export function getMaxWaitMinutes(env: NodeJS.ProcessEnv = process.env): number {
@@ -164,91 +226,87 @@ export async function clickRefreshButton(
   const maxWaitMinutes = options.maxWaitMinutes ?? getMaxWaitMinutes();
   const maxWaitTimeMs = maxWaitMinutes * 60 * 1000;
   const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const startWindowMs = options.startWindowMs ?? REFRESH_START_WINDOW_MS;
   debug("Looking for refresh button...");
 
-  // Navigate to home and click refresh button
-  // MF's home can stay busy past 30s after it renders, so networkidle is not a reliable gate.
-  // click() already waits for the button.
   await page.goto(mfUrls.home, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
-
   const refreshButton = page.locator('a:has-text("一括更新")').first();
   await refreshButton.click();
-
   info("Refreshing accounts...");
 
-  // From here on the refresh has been requested. A failure while watching its progress
-  // must not throw away the crawl: report it and let the caller check each account.
-  let last = { incompleteAccounts: [] as string[], remainingCount: 0 };
+  let lastCount = 0;
   try {
-    return await waitForRefresh(
-      page,
-      options,
-      maxWaitMinutes,
-      maxWaitTimeMs,
-      pollIntervalMs,
-      (s) => {
-        last = s;
-      },
-    );
+    const startedAt = Date.now();
+    let loadingObserved = false;
+    while (Date.now() - startedAt < maxWaitTimeMs) {
+      lastCount = await getLoadingCount(page);
+      if (lastCount > 0) loadingObserved = true;
+      const elapsedMs = Date.now() - startedAt;
+      const elapsed = Math.round(elapsedMs / 1000);
+      info(`[${elapsed}s] 残り: ${lastCount}`);
+      await options.onWaiting?.({
+        elapsedSeconds: elapsed,
+        incompleteAccounts: [],
+        maxWaitMinutes,
+        nextCheckSeconds: Math.round(pollIntervalMs / 1000),
+        remainingCount: lastCount,
+      });
+      if (!loadingObserved && elapsedMs >= startWindowMs) {
+        warn("Refresh loading was not observed within the start window.");
+        return {
+          completed: false,
+          incompleteAccounts: [],
+          remainingCount: lastCount,
+          reason: "not_observed",
+        };
+      }
+      if (loadingObserved && lastCount === 0) {
+        info("All updates completed!");
+        return { completed: true, incompleteAccounts: [] };
+      }
+      await page.waitForTimeout(Math.min(pollIntervalMs, Math.max(0, maxWaitTimeMs - elapsedMs)));
+    }
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("GET https://moneyforward.com/accounts/loading_statuses")
+    ) {
+      throw error;
+    }
     warn(
       `Stopped waiting for the refresh: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return { completed: false, ...last, reason: "wait_failed" };
+    return {
+      completed: false,
+      incompleteAccounts: [],
+      remainingCount: lastCount,
+      reason: "wait_failed",
+    };
   }
-}
 
-async function waitForRefresh(
-  page: Page,
-  options: RefreshOptions,
-  maxWaitMinutes: number,
-  maxWaitTimeMs: number,
-  pollIntervalMs: number,
-  remember: (status: { incompleteAccounts: string[]; remainingCount: number }) => void,
-): Promise<RefreshResult> {
-  // Wait for refresh to start
-  await page.waitForTimeout(3000);
+  if (lastCount === 0) {
+    warn("Refresh loading was not observed before the wait deadline.");
+    return { completed: false, incompleteAccounts: [], remainingCount: 0, reason: "not_observed" };
+  }
 
-  // Navigate to accounts page to check update status
-  await navigateToAccountsPage(page);
-
-  info("Waiting for all updates to complete on /accounts page...");
-
-  const startTime = Date.now();
-
-  while (Date.now() - startTime < maxWaitTimeMs) {
-    const { incompleteAccounts, remainingCount } = await getRefreshStatus(page);
-    remember({ incompleteAccounts, remainingCount });
-    const elapsed = Math.round((Date.now() - startTime) / 1000);
-    info(`[${elapsed}s] 残り: ${remainingCount}`);
-
-    await options.onWaiting?.({
-      elapsedSeconds: elapsed,
-      incompleteAccounts,
-      maxWaitMinutes,
-      nextCheckSeconds: Math.round(pollIntervalMs / 1000),
-      remainingCount,
-    });
-
-    if (remainingCount === 0) {
-      info("All updates completed!");
-      return { completed: true, incompleteAccounts: [] };
-    }
-
-    // Wait and navigate to accounts page again to get fresh status
-    // Using goto instead of reload to avoid ERR_ABORTED when frame is detached
-    await page.waitForTimeout(pollIntervalMs);
+  let accountSummary: AccountIssueSummary | undefined;
+  try {
     await navigateToAccountsPage(page);
+    accountSummary = await getAccountIssues(page, { alreadyOnAccountsPage: true });
+  } catch (error) {
+    warn(
+      `Could not name accounts still refreshing: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-
-  // Timeout: get list of accounts still updating
-  const { incompleteAccounts, remainingCount } = await getRefreshStatus(page);
-  remember({ incompleteAccounts, remainingCount });
-
-  warn(`Max wait time exceeded. ${remainingCount} accounts still updating:`);
-  for (const account of incompleteAccounts) {
-    warn(`  - ${account}`);
-  }
-
-  return { completed: false, incompleteAccounts, remainingCount, reason: "timeout" };
+  const incompleteAccounts = accountSummary?.issues.map(({ name }) => name) ?? [];
+  warn(`Max wait time exceeded. ${lastCount} accounts still updating:`);
+  for (const account of incompleteAccounts) warn(`  - ${account}`);
+  return {
+    completed: false,
+    incompleteAccounts,
+    remainingCount: lastCount,
+    reason: "timeout",
+    accountStatusChecked: true,
+    ...(accountSummary ? { accountSummary } : {}),
+  };
 }
