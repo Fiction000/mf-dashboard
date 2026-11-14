@@ -22,11 +22,35 @@ import {
 import { getLiabilities } from "./scrapers/liabilities.js";
 import { getManualHoldingAccountMap } from "./scrapers/manual-holding-accounts.js";
 import { getLinkedAccountDetailSource, getPortfolio } from "./scrapers/portfolio.js";
-import { clickRefreshButton, getMaxWaitMinutes } from "./scrapers/refresh.js";
+import {
+  clickRefreshButton,
+  getAccountIssues,
+  getMaxWaitMinutes,
+  type AccountIssue,
+  type AccountIssueSummary,
+} from "./scrapers/refresh.js";
 import { getRegisteredAccounts } from "./scrapers/registered-accounts.js";
 import { applyScheduledWithdrawals } from "./scrapers/scheduled-withdrawals.js";
 import { getSpendingTargets } from "./scrapers/spending-targets.js";
 import type { ScrapeOptions } from "./types.js";
+
+function describeAccountIssue({ name, status, message }: AccountIssue): string {
+  return status === "updating" ? `${name}: 更新中のまま` : `${name}: エラー（${message}）`;
+}
+
+function reportAccountIssues(issues: readonly AccountIssue[], unnamedCount = 0): void {
+  const total = issues.length + unnamedCount;
+  if (total === 0) return;
+  warn(`更新できなかった口座: ${total}件`);
+  for (const issue of issues) {
+    warn(`  - ${describeAccountIssue(issue)}`);
+  }
+  if (unnamedCount > 0) {
+    warn(
+      `  - 口座名を取得できなかった口座: ${unnamedCount}件（更新中のまま、または状態を確認できず）`,
+    );
+  }
+}
 
 async function getPortfolioWithScheduledWithdrawals(
   page: Page,
@@ -120,28 +144,112 @@ async function scrapeGlobalData(
           remainingCount: 0,
           incompleteAccounts: [],
         });
-      } else {
-        const notObserved = refreshResult.reason === "not_observed";
-        await progress.warnStep(
-          refreshStep,
-          {
-            code: notObserved ? "refresh_not_observed" : "refresh_timeout",
-            message: notObserved
-              ? "金融機関の一括更新開始を確認できませんでした"
-              : "金融機関の一括更新が待機時間を超えました",
-            maxWaitMinutes: getMaxWaitMinutes(),
-            incompleteAccounts: refreshResult.incompleteAccounts,
-          },
-          {
-            maxWaitMinutes: getMaxWaitMinutes(),
-            remainingCount: refreshResult.remainingCount ?? refreshResult.incompleteAccounts.length,
-            incompleteAccounts: refreshResult.incompleteAccounts,
-          },
-        );
       }
     } catch (error) {
+      // The bulk refresh could not even be requested (home page or button unavailable).
       await progress.failStep(refreshStep, normalizeCrawlerError(error, "refresh_failed"));
       throw error;
+    }
+
+    let accountSummary: AccountIssueSummary | null = refreshResult.accountSummary ?? null;
+    if (!refreshResult.accountStatusChecked) {
+      try {
+        accountSummary = await getAccountIssues(page);
+      } catch (error) {
+        // Never report "done" without per-account confirmation. If /accounts itself is unreadable,
+        // the registered_accounts step below fails the run.
+        warn(
+          `Could not read per-account refresh status: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const confirmedIssues = accountSummary?.issues ?? [];
+    // A re-read that found no status rows confirms nothing; treat it like a failed re-read.
+    const reReadUsable = accountSummary !== null && accountSummary.checkedCount > 0;
+    // When /accounts could not be re-read, fall back to the accounts the wait loop saw as 更新中.
+    const issues: AccountIssue[] = reReadUsable
+      ? confirmedIssues
+      : refreshResult.incompleteAccounts.map((name) => ({
+          name,
+          status: "updating" as const,
+          message: "更新中",
+        }));
+    const incompleteAccounts =
+      issues.length > 0 ? issues.map(({ name }) => name) : refreshResult.incompleteAccounts;
+    const remainingCount = reReadUsable
+      ? issues.length
+      : Math.max(
+          issues.length,
+          refreshResult.remainingCount ?? refreshResult.incompleteAccounts.length,
+        );
+    // The re-read of /accounts is fresher than the wait loop: all rows 正常 means the refresh finished.
+    // Zero status rows (login redirect, DOM change) confirms nothing, so it is never success.
+    const allConfirmedOk = reReadUsable && confirmedIssues.length === 0;
+
+    if (
+      accountSummary &&
+      accountSummary.checkedCount > 0 &&
+      issues.length === accountSummary.checkedCount
+    ) {
+      // Nothing was refreshed: keep failing the run as before.
+      reportAccountIssues(issues);
+      const message = `All MoneyForward accounts failed to refresh (${issues.length}/${accountSummary.checkedCount})`;
+      await progress.failStep(refreshStep, {
+        code: "refresh_incomplete",
+        message,
+        incompleteAccounts,
+        accountIssues: issues,
+      });
+      throw new Error(message);
+    }
+
+    if (refreshResult.completed && !reReadUsable && issues.length === 0) {
+      warn("口座ごとの更新状態を確認できませんでした");
+      await progress.warnStep(
+        refreshStep,
+        {
+          code: "refresh_incomplete",
+          message: "口座ごとの更新状態を確認できませんでした",
+          incompleteAccounts: [],
+          accountIssues: [],
+        },
+        { maxWaitMinutes: getMaxWaitMinutes(), remainingCount: 0, incompleteAccounts: [] },
+      );
+    } else if (allConfirmedOk && refreshResult.reason !== "not_observed") {
+      await progress.completeStep(refreshStep, {
+        remainingCount: 0,
+        incompleteAccounts: [],
+      });
+    } else {
+      // Some accounts did not finish or show an error. The crawl still succeeds with what it got;
+      // only those accounts are reported.
+      reportAccountIssues(issues, Math.max(0, remainingCount - issues.length));
+      const metadata = {
+        maxWaitMinutes: getMaxWaitMinutes(),
+        remainingCount,
+        incompleteAccounts,
+      };
+      await progress.warnStep(
+        refreshStep,
+        !refreshResult.completed && refreshResult.reason === "timeout"
+          ? {
+              code: "refresh_timeout",
+              message: "金融機関の一括更新が待機時間を超えました",
+              maxWaitMinutes: getMaxWaitMinutes(),
+              incompleteAccounts,
+              accountIssues: issues,
+            }
+          : {
+              code: "refresh_incomplete",
+              message:
+                refreshResult.reason === "not_observed"
+                  ? "金融機関の一括更新開始を確認できませんでした"
+                  : "一部の金融機関が更新できませんでした",
+              incompleteAccounts,
+              accountIssues: issues,
+            },
+        metadata,
+      );
     }
   }
 

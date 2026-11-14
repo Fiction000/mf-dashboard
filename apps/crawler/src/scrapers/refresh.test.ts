@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { describe, expect, test, vi } from "vitest";
 import {
+  classifyAccountIssues,
   clickRefreshButton,
   getMaxWaitMinutes,
   getRefreshStatus,
@@ -119,7 +120,8 @@ describe("navigateToAccountsPage", () => {
   test.each([
     "page.goto: net::ERR_ABORTED at https://moneyforward.com/accounts",
     "page.goto: Timeout 30000ms exceeded.",
-  ])("一時的な遷移エラーを1回だけ再試行する: %s", async (message) => {
+    'page.goto: Navigation to "https://moneyforward.com/accounts" is interrupted by another navigation to "https://moneyforward.com/accounts"',
+  ])("一時的な遷移エラーを再試行する: %s", async (message) => {
     const goto = vi
       .fn<(...args: any[]) => any>()
       .mockRejectedValueOnce(new Error(message))
@@ -252,11 +254,16 @@ describe("clickRefreshButton", () => {
     try {
       await expect(
         clickRefreshButton(page, { maxWaitMinutes: 0.001, pollIntervalMs: 10, startWindowMs: 5 }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         completed: false,
         incompleteAccounts: ["Bank A"],
         remainingCount: 1,
         reason: "timeout",
+        accountStatusChecked: true,
+        accountSummary: {
+          checkedCount: 1,
+          issues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
       });
       expect(get).toHaveBeenCalled();
       expect(goto.mock.calls.map(([url]) => url)).toEqual([
@@ -282,6 +289,7 @@ describe("clickRefreshButton", () => {
         incompleteAccounts: [],
         remainingCount: 1,
         reason: "timeout",
+        accountStatusChecked: true,
       });
       expect(goto.mock.calls.map(([url]) => url)).toEqual([
         "https://moneyforward.com/",
@@ -331,5 +339,72 @@ describe("clickRefreshButton", () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+});
+
+describe("classifyAccountIssues", () => {
+  test("正常と停止中は数えず、更新中とエラー表示の口座だけを状態付きで返す", () => {
+    expect(
+      classifyAccountIssues([
+        { name: " Bank A ", statuses: ["正常"] },
+        { name: "Bank B", statuses: ["更新中"] },
+        { name: "Card C", statuses: [" 重要なお知らせがあります "] },
+        { name: "Old D", statuses: ["取得を停止しています"] },
+        { name: "Empty E", statuses: [" "] },
+      ]),
+    ).toEqual({
+      checkedCount: 3,
+      issues: [
+        { name: "Bank B", status: "updating", message: "更新中" },
+        { name: "Card C", status: "error", message: "重要なお知らせがあります" },
+      ],
+    });
+  });
+
+  test("名前のない行は「名称不明」として残す", () => {
+    expect(classifyAccountIssues([{ name: null, statuses: ["エラー"] }]).issues).toEqual([
+      { name: "名称不明", status: "error", message: "エラー" },
+    ]);
+  });
+});
+
+describe("clickRefreshButton の更新待ち", () => {
+  test("polling中のwait failureはwait_failedにし、endpoint failureはthrowする", async () => {
+    const click = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const get = vi.fn<() => Promise<unknown>>().mockResolvedValue({
+      status: () => 200,
+      headers: () => ({ "content-type": "application/json" }),
+      url: () => "https://moneyforward.com/accounts/loading_statuses",
+      json: async () => [{ id: "9007199254740993", loading: true }],
+    });
+    const page = {
+      goto: vi.fn<() => Promise<null>>().mockResolvedValue(null),
+      request: { get },
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+      waitForTimeout: vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error("page crashed")),
+      locator: vi.fn<(selector: string) => any>(() => ({ first: () => ({ click }) })),
+    } as unknown as Page;
+
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 10 }),
+    ).resolves.toMatchObject({ completed: false, reason: "wait_failed" });
+    get.mockRejectedValueOnce(new Error("network unavailable"));
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 10 }),
+    ).rejects.toThrow(/GET https:\/\/moneyforward\.com\/accounts\/loading_statuses/);
+    expect(click).toHaveBeenCalledTimes(2);
+  });
+
+  test("一括更新ボタンを押す前の失敗はそのまま throw する", async () => {
+    const page = {
+      goto: vi
+        .fn<() => Promise<null>>()
+        .mockRejectedValue(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED")),
+      isClosed: vi.fn<() => boolean>().mockReturnValue(false),
+    } as unknown as Page;
+
+    await expect(
+      clickRefreshButton(page, { maxWaitMinutes: 1, pollIntervalMs: 0 }),
+    ).rejects.toThrow("ERR_NAME_NOT_RESOLVED");
   });
 });

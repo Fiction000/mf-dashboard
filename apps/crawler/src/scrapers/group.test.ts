@@ -59,6 +59,25 @@ describe("createGroupScope", () => {
 });
 
 describe("switchGroup", () => {
+  test("ホームへの遷移が MF の再読み込みに割り込まれても再試行して切り替える", async () => {
+    const { page, select, state } = createFailingGroupPage();
+    state.currentGroupId = "private-group-id";
+    select.isVisible = vi.fn<() => Promise<boolean>>(async () => false);
+    const goto = vi
+      .fn<() => Promise<null>>()
+      .mockRejectedValueOnce(
+        new Error(
+          'page.goto: Navigation to "https://moneyforward.com/" is interrupted by another navigation to "https://moneyforward.com/"',
+        ),
+      )
+      .mockResolvedValue(null);
+    (page as unknown as { goto: typeof goto }).goto = goto;
+
+    // 旧実装は ERR_ABORTED しか再試行せず、ここで例外になっていた。
+    await expect(switchGroup(page, "private-group-id")).resolves.toBeDefined();
+    expect(goto.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   test.each([
     {
       expectedMessage: "Group switch timed out",

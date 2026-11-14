@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseCrawlerRefreshStatus } from "./crawler-refresh-status";
 
 describe("parseCrawlerRefreshStatus", () => {
-  it("accepts a refresh_not_observed warning in the latest run", () => {
+  it("accepts an allowed refresh_incomplete warning in the latest run", () => {
     const status = parseCrawlerRefreshStatus({
       available: true,
       running: false,
@@ -33,10 +33,10 @@ describe("parseCrawlerRefreshStatus", () => {
             startedAt: "2026-11-12T12:00:00.000Z",
             finishedAt: "2026-11-12T12:00:05.000Z",
             reason: {
-              code: "refresh_not_observed",
+              code: "refresh_incomplete",
               message: "一括更新開始を確認できませんでした",
-              maxWaitMinutes: 20,
               incompleteAccounts: [],
+              accountIssues: [],
             },
           },
         ],
@@ -45,7 +45,7 @@ describe("parseCrawlerRefreshStatus", () => {
 
     expect(status.latestRun?.timeline[0]).toMatchObject({
       status: "warning",
-      reason: { code: "refresh_not_observed" },
+      reason: { code: "refresh_incomplete" },
     });
   });
 });

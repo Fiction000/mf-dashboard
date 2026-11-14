@@ -12,7 +12,7 @@ import { getAllGroups, getCurrentGroup, switchGroup } from "./scrapers/group.js"
 import { getLiabilities } from "./scrapers/liabilities.js";
 import { getManualHoldingAccountMap } from "./scrapers/manual-holding-accounts.js";
 import { getLinkedAccountDetailSource, getPortfolio } from "./scrapers/portfolio.js";
-import { clickRefreshButton } from "./scrapers/refresh.js";
+import { clickRefreshButton, getAccountIssues } from "./scrapers/refresh.js";
 import { getRegisteredAccounts } from "./scrapers/registered-accounts.js";
 import { getSpendingTargets } from "./scrapers/spending-targets.js";
 
@@ -49,6 +49,7 @@ vi.mock("./scrapers/portfolio.js", () => ({
 }));
 vi.mock("./scrapers/refresh.js", () => ({
   clickRefreshButton: vi.fn<() => void>(),
+  getAccountIssues: vi.fn<() => void>(),
   getMaxWaitMinutes: () => 20,
 }));
 vi.mock("./scrapers/registered-accounts.js", () => ({
@@ -69,6 +70,7 @@ beforeEach(async () => {
     completed: false,
     incompleteAccounts: ["Institution A", "Institution B"],
   });
+  vi.mocked(getAccountIssues).mockResolvedValue({ issues: [], checkedCount: 1 });
   vi.mocked(getRegisteredAccounts).mockResolvedValue({ accounts: [] });
   vi.mocked(getManualHoldingAccountMap).mockResolvedValue(new Map());
   vi.mocked(getLinkedAccountDetailSource).mockResolvedValue({
@@ -297,7 +299,7 @@ describe("scraper progress", () => {
     );
   });
 
-  test("refresh not_observed を refresh_not_observed warning にして続行する", async () => {
+  test("refresh not_observed を許可済み refresh_incomplete warning にして続行する", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-not-observed",
       source: "test",
@@ -317,19 +319,26 @@ describe("scraper progress", () => {
         expect.objectContaining({
           step: "moneyforward_refresh",
           status: "warning",
-          reason: expect.objectContaining({ code: "refresh_not_observed" }),
+          reason: expect.objectContaining({ code: "refresh_incomplete" }),
         }),
       ]),
     );
   });
 
-  test("refresh timeout を warning にし、未完了機関と group name を保持する", async () => {
+  test("再確認で全口座が更新中なら refresh step と run を failed にする", async () => {
     const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
       id: "run-a",
       source: "test",
       startedAt: "2026-07-01T00:00:00.000Z",
     });
     let waitingState = progress.getState();
+    vi.mocked(getAccountIssues).mockResolvedValue({
+      checkedCount: 2,
+      issues: [
+        { name: "Institution A", status: "updating", message: "更新中" },
+        { name: "Institution B", status: "updating", message: "更新中" },
+      ],
+    });
     vi.mocked(clickRefreshButton).mockImplementation(async (_page, options) => {
       await options?.onWaiting?.({
         elapsedSeconds: 30,
@@ -342,10 +351,14 @@ describe("scraper progress", () => {
       return {
         completed: false,
         incompleteAccounts: ["Institution A", "Institution B"],
+        remainingCount: 2,
+        reason: "timeout",
       };
     });
 
-    await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+    await expect(
+      scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+    ).rejects.toThrow(/All MoneyForward accounts failed to refresh/);
 
     expect(waitingState).toMatchObject({
       current: {
@@ -358,25 +371,350 @@ describe("scraper progress", () => {
         }),
       },
     });
-    expect(progress.getState().timeline).toEqual(
-      expect.arrayContaining([
+    expect(progress.getState().timeline).toContainEqual(
+      expect.objectContaining({
+        step: "moneyforward_refresh",
+        status: "failed",
+        reason: expect.objectContaining({ code: "refresh_incomplete" }),
+      }),
+    );
+  });
+
+  describe("一部の口座だけ更新できなかったとき", () => {
+    async function newProgress() {
+      return createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+        id: "run-a",
+        source: "test",
+        startedAt: "2026-07-01T00:00:00.000Z",
+      });
+    }
+
+    test("待機上限を超えても取得を続け、未完了・失敗の口座だけを状態付きで warning に残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({
+        checkedCount: 5,
+        issues: [
+          { name: "Bank A", status: "updating", message: "更新中" },
+          { name: "Card B", status: "error", message: "重要なお知らせがあります" },
+        ],
+      });
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).resolves.toBeDefined();
+
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: {
+          code: "refresh_timeout",
+          incompleteAccounts: ["Bank A", "Card B"],
+          accountIssues: [
+            { name: "Bank A", status: "updating", message: "更新中" },
+            { name: "Card B", status: "error", message: "重要なお知らせがあります" },
+          ],
+        },
+        metadata: expect.objectContaining({
+          remainingAccounts: 2,
+          incompleteAccounts: ["Bank A", "Card B"],
+        }),
+      });
+      expect(progress.getState().timeline).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ step: "registered_accounts", status: "done" }),
+          expect.objectContaining({ step: "portfolio", status: "done" }),
+          expect.objectContaining({ step: "group_data", status: "done" }),
+        ]),
+      );
+      const warnings = JSON.stringify(loggerMocks.warn.mock.calls);
+      expect(warnings).toContain("Bank A: 更新中のまま");
+      expect(warnings).toContain("Card B: エラー（重要なお知らせがあります）");
+    });
+
+    test("一括更新は終わったがエラー表示の口座があれば、その口座だけを warning に残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({ completed: true, incompleteAccounts: [] });
+      vi.mocked(getAccountIssues).mockResolvedValue({
+        checkedCount: 3,
+        issues: [{ name: "Card B", status: "error", message: "ログインに失敗しました" }],
+      });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
         expect.objectContaining({
           step: "moneyforward_refresh",
           status: "warning",
-          reason: expect.objectContaining({ code: "refresh_timeout" }),
-          metadata: expect.objectContaining({
-            kind: "refresh",
-            maxWaitMinutes: 20,
-            remainingAccounts: 2,
-            incompleteAccounts: ["Institution A", "Institution B"],
+          reason: expect.objectContaining({
+            code: "refresh_incomplete",
+            incompleteAccounts: ["Card B"],
+            accountIssues: [{ name: "Card B", status: "error", message: "ログインに失敗しました" }],
           }),
         }),
+      );
+    });
+
+    test("更新待ちの途中で画面遷移が失敗しても、run を落とさず warning にして取得を続ける", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: [],
+        remainingCount: 1,
+        reason: "wait_failed",
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("page.goto: Page crashed"));
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
         expect.objectContaining({
-          step: "group_data",
-          status: "done",
-          metadata: { kind: "group", groupName: "Group A" },
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({ code: "refresh_incomplete", accountIssues: [] }),
         }),
-      ]),
-    );
+      );
+      expect(getRegisteredAccounts).toHaveBeenCalled();
+    });
+
+    test("一括更新は終わったが口座ごとの状態を読めなければ、done にせず warning で残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({
+            code: "refresh_incomplete",
+            message: "口座ごとの更新状態を確認できませんでした",
+          }),
+        }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+    });
+
+    test("一括更新は終わったが口座一覧を開けなければ、run を失敗させる", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+      vi.mocked(getRegisteredAccounts).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).rejects.toThrow("net::ERR_CONNECTION_RESET");
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "registered_accounts", status: "failed" }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+    });
+
+    test("待機上限を超えても、再確認で全口座が正常なら done にする", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 3, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain("更新できなかった口座");
+    });
+
+    test("待機上限に達し再確認で状態行が0件なら、既知の口座と不明件数を warning に残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 2,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: {
+          code: "refresh_timeout",
+          incompleteAccounts: ["Bank A"],
+          accountIssues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
+        metadata: expect.objectContaining({ remainingAccounts: 2 }),
+      });
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).toContain(
+        "口座名を取得できなかった口座: 1件",
+      );
+    });
+
+    test("再確認に失敗しても、待機中に分かっていた口座名で報告する", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 2,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: {
+          incompleteAccounts: ["Bank A"],
+          accountIssues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+        },
+      });
+      const warnings = JSON.stringify(loggerMocks.warn.mock.calls);
+      expect(warnings).toContain("Bank A: 更新中のまま");
+      expect(warnings).toContain("口座名を取得できなかった口座: 1件");
+    });
+
+    test("一括更新は終わったが口座の状態行が1件も読めなければ、done にせず warning で残す", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 0, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({ message: "口座ごとの更新状態を確認できませんでした" }),
+        }),
+      );
+      expect(progress.getState().timeline).not.toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done" }),
+      );
+    });
+
+    test("全口座が成功なら報告を出さない", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({ completed: true, incompleteAccounts: [] });
+      vi.mocked(getAccountIssues).mockResolvedValue({ checkedCount: 4, issues: [] });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "done", reason: null }),
+      );
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain("更新できなかった口座");
+    });
+  });
+
+  describe("何も取れなかったとき", () => {
+    test("全口座が更新できなかったら refresh step を failed にして run を失敗させる", async () => {
+      const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+        id: "run-a",
+        source: "test",
+        startedAt: "2026-07-01T00:00:00.000Z",
+      });
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A", "Card B"],
+        remainingCount: 2,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({
+        checkedCount: 2,
+        issues: [
+          { name: "Bank A", status: "updating", message: "更新中" },
+          { name: "Card B", status: "error", message: "エラー" },
+        ],
+      });
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).rejects.toThrow(/All MoneyForward accounts failed to refresh/);
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "failed",
+          reason: expect.objectContaining({ code: "refresh_incomplete" }),
+        }),
+      );
+      expect(getRegisteredAccounts).not.toHaveBeenCalled();
+    });
+
+    test("更新待ちのあと口座一覧も開けなければ、今まで通り失敗する", async () => {
+      const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+        id: "run-a",
+        source: "test",
+        startedAt: "2026-07-01T00:00:00.000Z",
+      });
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: [],
+        reason: "wait_failed",
+      });
+      vi.mocked(getAccountIssues).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+      vi.mocked(getRegisteredAccounts).mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).rejects.toThrow("net::ERR_CONNECTION_RESET");
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "registered_accounts", status: "failed" }),
+      );
+    });
+
+    test("一括更新ボタンを押せないときは今まで通り失敗する", async () => {
+      const progress = await createCrawlerProgressReporter(path.join(tempDir, "state.json"), {
+        id: "run-a",
+        source: "test",
+        startedAt: "2026-07-01T00:00:00.000Z",
+      });
+      vi.mocked(clickRefreshButton).mockRejectedValue(
+        new Error("locator.click: Timeout 30000ms exceeded."),
+      );
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress),
+      ).rejects.toThrow("locator.click");
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "moneyforward_refresh", status: "failed" }),
+      );
+    });
   });
 });

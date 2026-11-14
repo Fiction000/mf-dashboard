@@ -1,4 +1,5 @@
 import type {
+  CrawlerRunAccountIssue,
   CrawlerRunCurrent,
   CrawlerRunProgress,
   CrawlerRunReason,
@@ -31,6 +32,19 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isAccountIssueList(value: unknown): value is CrawlerRunAccountIssue[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (issue) =>
+        isRecord(issue) &&
+        typeof issue.name === "string" &&
+        (issue.status === "updating" || issue.status === "error") &&
+        typeof issue.message === "string",
+    )
+  );
+}
+
 function isTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -53,14 +67,24 @@ function readReason(value: unknown): CrawlerRunReason | null {
     case "unknown_error":
       return { code: value.code, message: value.message };
     case "refresh_timeout":
-    case "refresh_not_observed":
       return isNonNegativeFiniteNumber(value.maxWaitMinutes) &&
-        isStringArray(value.incompleteAccounts)
+        isStringArray(value.incompleteAccounts) &&
+        (value.accountIssues === undefined || isAccountIssueList(value.accountIssues))
         ? {
             code: value.code,
             message: value.message,
             maxWaitMinutes: value.maxWaitMinutes,
             incompleteAccounts: value.incompleteAccounts,
+            ...(value.accountIssues === undefined ? {} : { accountIssues: value.accountIssues }),
+          }
+        : null;
+    case "refresh_incomplete":
+      return isStringArray(value.incompleteAccounts) && isAccountIssueList(value.accountIssues)
+        ? {
+            code: value.code,
+            message: value.message,
+            incompleteAccounts: value.incompleteAccounts,
+            accountIssues: value.accountIssues,
           }
         : null;
     case "moneyforward_timeout":

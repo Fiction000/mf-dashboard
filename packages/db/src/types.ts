@@ -171,11 +171,21 @@ export interface SpendingTargetsData {
 }
 
 // --- Refresh Result ---
+export interface RefreshAccountIssue {
+  name: string;
+  status: "updating" | "error";
+  message: string;
+}
+
 export interface RefreshResult {
   completed: boolean;
   incompleteAccounts: string[];
   remainingCount?: number;
-  reason?: "timeout" | "not_observed";
+  /** Per-account re-read gathered during the timeout-only /accounts visit. */
+  accountStatusChecked?: boolean;
+  accountSummary?: { checkedCount: number; issues: RefreshAccountIssue[] };
+  /** Why the wait ended without completion. */
+  reason?: "timeout" | "not_observed" | "wait_failed";
 }
 
 // --- Scraped Data ---
