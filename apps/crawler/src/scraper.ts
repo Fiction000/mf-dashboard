@@ -139,12 +139,6 @@ async function scrapeGlobalData(
             ...waiting,
           }),
       });
-      if (refreshResult.completed) {
-        await progress.completeStep(refreshStep, {
-          remainingCount: 0,
-          incompleteAccounts: [],
-        });
-      }
     } catch (error) {
       // The bulk refresh could not even be requested (home page or button unavailable).
       await progress.failStep(refreshStep, normalizeCrawlerError(error, "refresh_failed"));

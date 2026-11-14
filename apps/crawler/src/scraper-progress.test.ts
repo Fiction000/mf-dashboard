@@ -662,6 +662,34 @@ describe("scraper progress", () => {
       );
     });
 
+    test("口座ごとの再確認が終わるまで、更新ステップを done として書き出さない", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: true,
+        incompleteAccounts: [],
+        remainingCount: 0,
+      });
+      let statusDuringReRead: string | undefined;
+      vi.mocked(getAccountIssues).mockImplementation(async () => {
+        statusDuringReRead = progress
+          .getState()
+          .timeline.find((item) => item.step === "moneyforward_refresh")?.status;
+        throw new Error("net::ERR_CONNECTION_RESET");
+      });
+
+      await scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress);
+
+      expect(statusDuringReRead).toBeDefined();
+      expect(statusDuringReRead).not.toBe("done");
+      const refresh = progress
+        .getState()
+        .timeline.find((item) => item.step === "moneyforward_refresh");
+      expect(refresh).toMatchObject({
+        status: "warning",
+        reason: expect.objectContaining({ message: "口座ごとの更新状態を確認できませんでした" }),
+      });
+    });
+
     test("全口座が成功なら報告を出さない", async () => {
       const progress = await newProgress();
       vi.mocked(clickRefreshButton).mockResolvedValue({ completed: true, incompleteAccounts: [] });
