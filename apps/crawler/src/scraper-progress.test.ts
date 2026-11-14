@@ -389,6 +389,40 @@ describe("scraper progress", () => {
       });
     }
 
+    test("REQUIRE_REFRESH_COMPLETE=trueでも一部未完了ならwarningで続行する", async () => {
+      const progress = await newProgress();
+      vi.mocked(clickRefreshButton).mockResolvedValue({
+        completed: false,
+        incompleteAccounts: ["Bank A"],
+        remainingCount: 1,
+        reason: "timeout",
+      });
+      vi.mocked(getAccountIssues).mockResolvedValue({
+        checkedCount: 3,
+        issues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+      });
+
+      await expect(
+        scrapeAllGroups({} as Parameters<typeof scrapeAllGroups>[0], progress, {
+          requireRefreshComplete: true,
+        }),
+      ).resolves.toBeDefined();
+
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({
+          step: "moneyforward_refresh",
+          status: "warning",
+          reason: expect.objectContaining({
+            code: "refresh_timeout",
+            accountIssues: [{ name: "Bank A", status: "updating", message: "更新中" }],
+          }),
+        }),
+      );
+      expect(progress.getState().timeline).toContainEqual(
+        expect.objectContaining({ step: "registered_accounts", status: "done" }),
+      );
+    });
+
     test("待機上限を超えても取得を続け、未完了・失敗の口座だけを状態付きで warning に残す", async () => {
       const progress = await newProgress();
       vi.mocked(clickRefreshButton).mockResolvedValue({
